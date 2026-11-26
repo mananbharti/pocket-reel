@@ -224,9 +224,10 @@ jobs:
             | --- | --- |
             | Windows 10/11 | `PocketReel-windows-x64-setup.exe` (or the `.msi`) |
             | Linux | `PocketReel-linux-x86_64.AppImage` (or the `.deb`) |
+            | macOS 11+ (Apple silicon) | `PocketReel-macos-arm64.dmg` is added once it is built |
             | Android 8+ | `PocketReel-android.apk` is added to this release once its device test passes |
 
-            Checksums are in `SHA256SUMS.txt`. The Windows installer is not code-signed yet, so SmartScreen may ask you to confirm.
+            Checksums are in `SHA256SUMS.txt`. The Windows installer is not code-signed yet, so SmartScreen may ask you to confirm. The macOS app is not notarised yet: the first time, open it, then go to System Settings › Privacy & Security and click Open Anyway.
 
   publish-android:
     name: Attach Android APK
@@ -247,3 +248,11 @@ jobs:
           sha256sum PocketReel-android.apk >> sums.txt
           mv sums.txt SHA256SUMS.txt
           gh release upload "$TAG" PocketReel-android.apk SHA256SUMS.txt --clobber
+
+  macos:
+    name: macOS
+    needs: publish
+    if: github.ref_type == 'tag' || inputs.tag != ''
+    uses: ./.github/workflows/release-macos.yml
+    with:
+      tag: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}

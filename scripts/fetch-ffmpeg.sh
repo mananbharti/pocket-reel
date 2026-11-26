@@ -1,15 +1,32 @@
 #!/usr/bin/env bash
 # Download a static GPL FFmpeg build (BtbN/FFmpeg-Builds) and place ffmpeg and
 # ffprobe where the Tauri bundler picks them up.
-# Usage: scripts/fetch-ffmpeg.sh linux64|linuxarm64|win64
+# macOS uses Martin Riedl's static builds (also GPL, with LAME and x264).
+# Usage: scripts/fetch-ffmpeg.sh linux64|linuxarm64|win64|macos-arm64
 set -euo pipefail
-target="${1:?target: linux64, linuxarm64 or win64}"
+target="${1:?target: linux64, linuxarm64, win64 or macos-arm64}"
 series="${FFMPEG_SERIES:-n8.1}"
 version="${series#n}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 dest="$root/app/src-tauri/resources/ffmpeg"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+
+if [[ "$target" == macos-arm64 ]]; then
+  mkdir -p "$dest"
+  rm -f "$dest"/ffmpeg* "$dest"/ffprobe*
+  for tool in ffmpeg ffprobe; do
+    curl -fsSL --retry 5 --retry-all-errors \
+      "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/$tool.zip" -o "$work/$tool.zip"
+    unzip -q -o "$work/$tool.zip" -d "$dest"
+  done
+  chmod +x "$dest"/ff*
+  # Apple silicon only runs signed code; an ad-hoc signature is enough.
+  codesign --force --sign - "$dest/ffmpeg" "$dest/ffprobe" 2>/dev/null || true
+  "$dest/ffmpeg" -hide_banner -version | head -1 || true
+  echo "FFmpeg (macos-arm64) -> $dest"
+  exit 0
+fi
 
 if [[ "$target" == win64 ]]; then
   name="ffmpeg-${series}-latest-win64-gpl-${version}"

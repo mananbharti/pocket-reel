@@ -1,0 +1,78 @@
+name: Release macOS
+
+# Builds the Apple silicon app and attaches it to an existing release.
+# Release runs this after Windows and Linux are published; it can also be
+# started by hand to add macOS to a release that already exists.
+
+on:
+  workflow_call:
+    inputs:
+      tag: { type: string, default: "" }
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach the macOS app to (for example v1.1.0). Leave empty to only build."
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS (Apple silicon, .dmg)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
+      - name: Bundle FFmpeg, yt-dlp and QuickJS
+        run: |
+          scripts/fetch-ffmpeg.sh macos-arm64
+          scripts/fetch-downloader.sh macos-arm64
+      - name: Build
+        working-directory: app
+        run: |
+          npm ci
+          npx tauri build --bundles app,dmg
+      - name: Smoke test the bundled tools
+        run: |
+          F=$PWD/app/src-tauri/resources/ffmpeg
+          $F/ffmpeg -v error -f lavfi -i testsrc2=size=320x240:duration=2 -f lavfi -i sine=d=2 -c:v libx264 -c:a aac s.mp4
+          export POCKETREEL_FFMPEG=$F/ffmpeg POCKETREEL_FFPROBE=$F/ffprobe
+          cargo run --release -p pocketreel-cli -- convert s.mp4 -p classic-avi -o out
+          mkdir web && cp s.mp4 web/clip.mp4
+          (cd web && python3 -m http.server 8765 >/dev/null 2>&1 &)
+          sleep 2
+          cargo run --release -p pocketreel-cli -- convert http://127.0.0.1:8765/clip.mp4 -o out-link
+          ls -la out out-link && test -s out-link/clip.avi
+          app=$(ls -d target/release/bundle/macos/*.app | head -1)
+          ls "$app/Contents/Resources/ffmpeg"
+          codesign --verify --deep "$app" && echo "signature ok"
+          cp target/release/bundle/dmg/*.dmg PocketReel-macos-arm64.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: PocketReel-macos-arm64.dmg
+
+  publish-macos:
+    name: Attach macOS app
+    needs: macos
+    if: inputs.tag != ''
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: macos }
+      - name: Upload the app and update checksums
+        run: |
+          gh release download "$TAG" -p SHA256SUMS.txt --clobber
+          grep -v 'PocketReel-macos-arm64.dmg' SHA256SUMS.txt > sums.txt || true
+          sha256sum PocketReel-macos-arm64.dmg >> sums.txt
+          mv sums.txt SHA256SUMS.txt
+          gh release upload "$TAG" PocketReel-macos-arm64.dmg SHA256SUMS.txt --clobber

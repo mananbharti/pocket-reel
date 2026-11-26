@@ -80,6 +80,19 @@ fn tool_dirs(app: &AppHandle) -> Vec<PathBuf> {
     if let Ok(res) = app.path().resource_dir() {
         dirs.push(res.join("ffmpeg"));
         dirs.push(res.join("resources").join("ffmpeg"));
+        // A downloaded, unnotarised app keeps macOS's quarantine flag on the
+        // bundled tools, which can stop them from running; clear it once.
+        #[cfg(target_os = "macos")]
+        {
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            let dir = res.join("ffmpeg");
+            ONCE.call_once(|| {
+                let _ = std::process::Command::new("/usr/bin/xattr")
+                    .args(["-dr", "com.apple.quarantine"])
+                    .arg(&dir)
+                    .status();
+            });
+        }
     }
     // Android packs the executables as lib*.so next to our own library.
     if cfg!(target_os = "android") {

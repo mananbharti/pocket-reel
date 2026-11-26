@@ -27,6 +27,7 @@ case "$target" in
   *) echo "unknown target $target" >&2; exit 1 ;;
 esac
 chmod +x "$dest"/yt-dlp* "$dest"/qjs* 2>/dev/null || true
+[[ "$target" == macos-arm64 ]] && codesign --force --sign - "$dest/yt-dlp" "$dest/qjs" 2>/dev/null || true
 get "https://raw.githubusercontent.com/yt-dlp/yt-dlp/master/LICENSE" "$dest/YT-DLP-LICENSE.txt" || true
 { if [[ "$target" == win64 ]]; then "$dest/yt-dlp.exe" --version; else "$dest/yt-dlp" --version; fi; } 2>/dev/null | sed "s/^/yt-dlp /" || true
 echo "yt-dlp and QuickJS ($target) -> $dest"
