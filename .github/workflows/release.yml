@@ -163,8 +163,11 @@ jobs:
         with:
           api-level: 34
           arch: x86_64
-          target: google_apis
+          # Plain AOSP image: Google Play services on fresh emulators often
+          # crashes during boot-time updates and takes apps down with it.
+          target: default
           profile: pixel_6
+          ram-size: 4096M
           disable-animations: true
           script: python3 scripts/android-smoke.py PocketReel-android.apk android-shots
       - uses: actions/upload-artifact@v4
