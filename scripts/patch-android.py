@@ -40,6 +40,23 @@ if "useLegacyPackaging" not in text:
     gradle.write_text(text)
     print("patched", gradle)
 
+# Release builds are shrunk with R8, which renames the classes youtubedl-android
+# and Jackson read by reflection; keep them. (Tauri's build includes every
+# *.pro file in the app folder.)
+rules = gen / "app" / "youtubedl-rules.pro"
+rules.write_text("""-keep class com.yausername.** { *; }
+-keep class com.fasterxml.jackson.** { *; }
+-keep class org.apache.commons.compress.** { *; }
+-keep class app.pocketreel.converter.** { *; }
+-keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
+-dontwarn com.fasterxml.jackson.**
+-dontwarn org.apache.commons.**
+-dontwarn java.beans.**
+""")
+print("wrote", rules)
+if "**/*.pro" not in text and "proguard" in text:
+    print("warning: release build does not pick up extra .pro files")
+
 plugin_src = root / "app" / "src-tauri" / "android" / "YtdlPlugin.kt"
 plugin_dst = gen / "app" / "src" / "main" / "java" / "app" / "pocketreel" / "converter" / "YtdlPlugin.kt"
 plugin_dst.parent.mkdir(parents=True, exist_ok=True)

@@ -193,26 +193,35 @@ time.sleep(5)
 shot("05-shared")
 deadline = time.time() + 300
 linked = None
-while time.time() < deadline and not linked:
+failure = None
+while time.time() < deadline and not linked and not failure:
     for base in bases:
         for line in adb("shell", "ls", "-1", f"'{base}'", check=False).splitlines():
             if line.strip() == "clip.avi":
                 linked = base + "clip.avi"
     if not linked:
-        for n in nodes():
-            if re.search(r"couldn.t|can.t|failed|isn.t", n["text"], re.I) and "clip" not in n["text"]:
-                shot("05-share-error")
-                print("Visible:", [x["text"].strip() for x in nodes() if x["text"].strip()][:30])
-                break
+        texts = [n["text"].strip() for n in nodes() if n["text"].strip()]
+        # The row for the link shows its error under the link's address.
+        for i, t in enumerate(texts):
+            if t.startswith("http://10.0.2.2") and i + 1 < len(texts):
+                nxt = texts[i + 1]
+                if not re.match(r"(From |Getting|Downloading|Converting|Waiting|Ready)", nxt):
+                    failure = nxt
         time.sleep(3)
-time.sleep(4)
-shot("06-link-converted")
+time.sleep(2)
+shot("06-link-converted" if linked else "06-link-failed")
 with open(os.path.join(outdir, "logcat-share.txt"), "w") as f:
-    f.write(adb("logcat", "-d", "-t", "1500", check=False))
+    f.write(adb("logcat", "-d", "-t", "4000", check=False))
+with open(os.path.join(outdir, "logcat-app.txt"), "w") as f:
+    pid = adb("shell", "pidof", PKG, check=False).strip()
+    f.write(adb("logcat", "-d", "-s", "PocketReel:V", "Tauri:V", "RustStdoutStderr:V", "AndroidRuntime:E", check=False))
+    if pid:
+        f.write("\n---- app process ----\n" + adb("logcat", "-d", f"--pid={pid}", check=False))
 server.shutdown()
 if not linked:
     texts = [n["text"].strip() for n in nodes() if n["text"].strip()]
-    raise SystemExit(f"The shared link was not converted. Visible: {texts[:40]}")
+    print(open(os.path.join(outdir, "logcat-app.txt")).read()[-4000:])
+    raise SystemExit(f"The shared link was not converted ({failure or 'timed out'}). Visible: {texts[:40]}")
 adb("pull", linked, "linked.avi")
 check_avi("linked.avi")
 print(f"OK: shared link converted to {linked}")

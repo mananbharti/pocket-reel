@@ -8,6 +8,7 @@ package app.pocketreel.converter
 
 import android.app.Activity
 import android.content.Intent
+import android.util.Log
 import android.webkit.WebView
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
@@ -88,19 +89,18 @@ class YtdlPlugin(private val activity: Activity) : Plugin(activity) {
         Thread {
             try {
                 ensureReady()
+                // yt-dlp's JSON is parsed in Rust, the same way as on desktop.
                 val request = YoutubeDLRequest(args.url)
                 request.addOption("--no-playlist")
-                val info = YoutubeDL.getInstance().getInfo(request)
+                request.addOption("--skip-download")
+                request.addOption("--dump-single-json")
+                val response = YoutubeDL.getInstance().execute(request)
                 val r = JSObject()
-                r.put("id", info.id ?: "")
-                r.put("title", info.title ?: "Video")
-                r.put("duration", info.duration)
-                r.put("thumbnail", info.thumbnail)
-                r.put("uploader", info.uploader)
-                r.put("url", info.webpageUrl ?: args.url)
+                r.put("json", response.out)
                 invoke.resolve(r)
             } catch (e: Throwable) {
-                invoke.reject(e.message ?: "Couldn't read this link")
+                Log.e(TAG, "info failed for ${args.url}", e)
+                invoke.reject(describe(e, "Couldn't read this link"))
             }
         }.start()
     }
@@ -134,7 +134,8 @@ class YtdlPlugin(private val activity: Activity) : Plugin(activity) {
             } catch (e: YoutubeDL.CanceledException) {
                 invoke.reject("Canceled")
             } catch (e: Throwable) {
-                invoke.reject(e.message ?: "The download failed")
+                Log.e(TAG, "download failed for ${args.url}", e)
+                invoke.reject(describe(e, "The download failed"))
             } finally {
                 progress.remove(args.id)
             }
@@ -169,12 +170,22 @@ class YtdlPlugin(private val activity: Activity) : Plugin(activity) {
                 r.put("status", status?.name ?: "UNKNOWN")
                 invoke.resolve(r)
             } catch (e: Throwable) {
-                invoke.reject(e.message ?: "Update failed")
+                Log.e(TAG, "update failed", e)
+                invoke.reject(describe(e, "Update failed"))
             }
         }.start()
     }
 
+    /** The error text plus its causes, so the real reason reaches the app. */
+    private fun describe(e: Throwable, fallback: String): String {
+        val parts = generateSequence(e) { it.cause }.take(4)
+            .mapNotNull { it.message?.trim()?.takeIf { m -> m.isNotEmpty() } ?: it.javaClass.simpleName }
+            .distinct().toList()
+        return if (parts.isEmpty()) fallback else parts.joinToString(": ")
+    }
+
     companion object {
+        const val TAG = "PocketReel"
         // Same choice as desktop: small H.264 + AAC is plenty for a 160 x 120 player.
         const val FORMAT = "bv*[height<=360][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=480]+ba/b[height<=480]/b"
     }

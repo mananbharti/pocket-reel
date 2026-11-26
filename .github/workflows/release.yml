@@ -9,6 +9,10 @@ on:
         description: "Release tag to publish to (for example v1.0.0). Leave empty to only build."
         type: string
         default: ""
+      android_only:
+        description: "Only build Android and attach the APK to an existing release."
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -19,6 +23,7 @@ env:
 jobs:
   linux:
     name: Linux (.deb, AppImage)
+    if: ${{ !inputs.android_only }}
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -60,6 +65,7 @@ jobs:
 
   windows:
     name: Windows (installer, MSI)
+    if: ${{ !inputs.android_only }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -240,7 +246,10 @@ jobs:
   publish-android:
     name: Attach Android APK
     needs: [android, android-test, publish]
-    if: github.ref_type == 'tag' || inputs.tag != ''
+    if: >-
+      always() && needs.android-test.result == 'success' &&
+      (needs.publish.result == 'success' || (inputs.android_only && needs.publish.result == 'skipped')) &&
+      (github.ref_type == 'tag' || inputs.tag != '')'
     runs-on: ubuntu-24.04
     env:
       TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}

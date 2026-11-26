@@ -109,6 +109,11 @@ pub fn friendly_error(stderr: &str) -> String {
                 _ => m,
             }
         })
+        .or_else(|| {
+            // Not a yt-dlp error line (for example the Android library failing to
+            // start): show its last line rather than hiding it.
+            stderr.lines().rev().map(str::trim).find(|l| !l.is_empty()).map(|l| l.chars().take(300).collect())
+        })
         .unwrap_or_else(|| "The download failed.".into())
     }
 }
@@ -385,6 +390,8 @@ mod tests {
     fn friendly_messages() {
         assert!(friendly_error("ERROR: [youtube] x: Sign in to confirm you’re not a bot").contains("not a bot"));
         assert_eq!(friendly_error("ERROR: [youtube] abc: Some odd failure"), "Some odd failure");
+        assert_eq!(friendly_error("failed to initialize: libpython.so missing"), "failed to initialize: libpython.so missing");
+        assert_eq!(friendly_error(""), "The download failed.");
     }
 
     #[test]

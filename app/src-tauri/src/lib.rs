@@ -381,7 +381,7 @@ mod mobile {
     use std::sync::mpsc;
     use std::time::{Duration, SystemTime};
 
-    use pocketreel_engine::download::{friendly_error, Downloader, RemoteInfo};
+    use pocketreel_engine::download::{friendly_error, parse_info, Downloader, RemoteInfo};
     use pocketreel_engine::{CancelToken, Error, Result};
     use serde::Deserialize;
     use serde_json::json;
@@ -396,12 +396,7 @@ mod mobile {
 
     #[derive(Deserialize)]
     struct InfoResp {
-        id: Option<String>,
-        title: Option<String>,
-        duration: Option<f64>,
-        thumbnail: Option<String>,
-        uploader: Option<String>,
-        url: Option<String>,
+        json: String,
     }
 
     #[derive(Deserialize)]
@@ -450,14 +445,7 @@ mod mobile {
     impl Downloader for MobileYtdl {
         fn info(&self, url: &str) -> Result<RemoteInfo> {
             let r: InfoResp = self.handle.run_mobile_plugin("info", json!({ "url": url })).map_err(err)?;
-            Ok(RemoteInfo {
-                url: r.url.unwrap_or_else(|| url.to_string()),
-                id: r.id.unwrap_or_default(),
-                title: r.title.filter(|t| !t.is_empty()).unwrap_or_else(|| "Video".into()),
-                duration: r.duration.filter(|d| *d > 0.0),
-                thumbnail: r.thumbnail,
-                uploader: r.uploader,
-            })
+            parse_info(url, &r.json)
         }
 
         fn download(
