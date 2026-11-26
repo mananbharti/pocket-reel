@@ -10,7 +10,7 @@ Add videos or paste a link, press Convert, copy them to the player. That's it.
 [![CI](https://github.com/mananbharti/pocket-reel/actions/workflows/ci.yml/badge.svg)](https://github.com/mananbharti/pocket-reel/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/mananbharti/pocket-reel?display_name=tag&sort=semver)](https://github.com/mananbharti/pocket-reel/releases/latest)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
-![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20Android-555)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-555)
 
 [**Download**](https://github.com/mananbharti/pocket-reel/releases/latest) ·
 [**Website**](https://mananbharti.github.io/pocket-reel/) ·
@@ -41,6 +41,7 @@ Most players have a 160 × 120 screen, which is the default. If yours is differe
 | --- | --- |
 | **Windows 10/11** (64-bit) | [`PocketReel-windows-x64-setup.exe`](https://github.com/mananbharti/pocket-reel/releases/latest/download/PocketReel-windows-x64-setup.exe) (an `.msi` is attached too) |
 | **Linux** (x86-64) | [`PocketReel-linux-x86_64.AppImage`](https://github.com/mananbharti/pocket-reel/releases/latest/download/PocketReel-linux-x86_64.AppImage) (a `.deb` is attached too) |
+| **macOS 11+** (Apple silicon) | [`PocketReel-macos-arm64.dmg`](https://github.com/mananbharti/pocket-reel/releases/latest/download/PocketReel-macos-arm64.dmg). Open it and drag Pocket Reel to Applications. |
 | **Android 8+** | [`PocketReel-android.apk`](https://github.com/mananbharti/pocket-reel/releases/latest/download/PocketReel-android.apk). Converted videos are saved to *Movies › Pocket Reel*. |
 
 Everything is built in. Nothing to install and no account. Your own videos never leave your device; the internet is only used when you add a link.
@@ -50,6 +51,7 @@ Everything is built in. Nothing to install and no account. Your own videos never
 
 > [!NOTE]
 > The Windows installer is not code-signed yet, so SmartScreen may ask you to confirm ("More info", then "Run anyway").
+> The Mac app is not notarised yet: the first time, open it, then go to *System Settings › Privacy & Security* and click *Open Anyway*.
 
 ## Why this exists
 
@@ -102,7 +104,7 @@ cd app && npm ci && npx tauri dev        # run the app
 
 - `crates/engine`: the conversion engine in Rust, including the from-scratch JPEG, IMA ADPCM and AVI writers, and link downloads through [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 - `crates/cli`: `pocketreel convert *.mp4 -o /media/PLAYER/VIDEO` for batch use from a terminal.
-- `app`: the Svelte UI and the Tauri shell for Windows, Linux and Android.
+- `app`: the Svelte UI and the Tauri shell for Windows, macOS, Linux and Android.
 - `.github/workflows/release.yml`: builds and tests all three platforms; Android builds are installed on an emulator, convert a real video through the app, and the result is checked.
 
 The engine also knows more formats (MP4, MP3 and others) that the CLI can produce; the app keeps to the one job.
