@@ -21,7 +21,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Unit, fidelity and end-to-end tests
-        run: cargo test --release -p pocketreel-engine -p pocketreel-cli
+        run: cargo test --release -p pocketreel-engine -p pocketreel-cli && cargo build --release -p pocketreel-cli
       - name: CLI smoke test
         run: |
           ffmpeg -v error -f lavfi -i testsrc2=size=640x360:rate=25:duration=4 -f lavfi -i sine=d=4 -c:v libx264 -c:a aac sample.mp4
