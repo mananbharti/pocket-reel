@@ -29,7 +29,7 @@ Add videos or paste a link, press Convert, copy them to the player. That's it.
 2. **Press Convert.** Every video is turned into the exact video format your MP3 player plays.
 3. **Copy them to your player.** Plug the player in and copy the `.avi` files onto it (usually into its `VIDEO` folder).
 
-**Links work too.** Paste a link from YouTube, Instagram, X, Facebook, Vimeo, TikTok, Reddit, Dailymotion and [1000+ other sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md), or a direct link to a video file. Pocket Reel downloads it and converts it in one go. On Android, tap *Share* in YouTube or your browser and pick **Pocket Reel**: the video is downloaded and converted on its own.
+**Links work too.** Paste a link from YouTube, Instagram, X, Facebook, Vimeo, TikTok, Reddit, Dailymotion and [1000+ other sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md), or a direct link to a video file. Pocket Reel downloads it and converts it in one go, showing live progress for both steps (size, speed and time left). *Link quality* picks how much to download: **360p is recommended**, since a small player screen gains nothing from more and it downloads several times faster; 480p, 720p, 1080p and the best available are there too. On Android, tap *Share* in YouTube or your browser and pick **Pocket Reel**: the video is downloaded and converted on its own.
 
 **Tip:** set *Save to* to your player's drive, and the converted videos go straight onto the player.
 

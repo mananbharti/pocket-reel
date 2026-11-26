@@ -25,9 +25,37 @@ export interface Prefs {
   outputDir: string | null;
   /** Player screen size, "WIDTHxHEIGHT". */
   screen: string;
+  /** Download quality for links: tallest video in pixels, 0 = best available. */
+  quality: number;
 }
 
 const PREFS_KEY = "pocketreel.prefs";
+
+/** Rough seconds to convert a video of `duration` seconds for the player. */
+const convertSeconds = (duration: number) => Math.max(2, duration / 8);
+
+/** Seconds left for one job, or null while there's nothing to go on yet. */
+export function jobRemaining(j: JobSnapshot): number | null {
+  if (j.state === "done" || j.state === "failed" || j.state === "canceled") return 0;
+  const p = j.progress;
+  const conv = convertSeconds(j.duration || 0);
+  // A waiting link: assume downloading takes about as long as converting.
+  if (j.state === "queued") return j.url ? conv * 2 : conv;
+  if (p?.downloading) {
+    if (p.etaSeconds == null) return null;
+    // yt-dlp's estimate covers the current stream; a smaller audio stream may follow.
+    return p.etaSeconds * (p.fraction < 0.82 ? 1.15 : 1) + conv;
+  }
+  return p?.etaSeconds ?? conv * (1 - (p?.fraction ?? 0));
+}
+
+/** One job's share done, 0..1. Links count downloading as the first half. */
+export function jobFraction(j: JobSnapshot): number {
+  if (j.state === "done" || j.state === "failed" || j.state === "canceled") return 1;
+  const f = j.progress?.fraction ?? 0;
+  if (!j.url) return f;
+  return j.progress?.downloading ? f * 0.5 : j.state === "running" && j.progress ? 0.5 + f * 0.5 : 0;
+}
 
 function loadPrefs(): Prefs {
   const defaults: Prefs = {
@@ -38,6 +66,7 @@ function loadPrefs(): Prefs {
     preset: "classic-avi",
     outputDir: null,
     screen: "160x120",
+    quality: 360,
   };
   try {
     return { ...defaults, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") };
@@ -124,6 +153,43 @@ export class AppState {
     this.pending.some((i) => i.isLink || i.estimating || (!i.estimate && !i.planError)),
   );
   canDownload = $derived(!!this.info?.downloads);
+
+  /** The jobs started together by the last Convert press(es), for overall progress. */
+  batch = $state<{ ids: number[]; started: number } | null>(null);
+  /** Overall progress of the current batch: share done, jobs finished, time left. */
+  batchProgress = $derived.by(() => {
+    const b = this.batch;
+    if (!b) return null;
+    const jobs = b.ids.map((id) => this.jobs[id]).filter(Boolean);
+    if (!jobs.length) return null;
+    const finished = jobs.filter((j) => j.state !== "running" && j.state !== "queued").length;
+    const running = jobs.filter((j) => j.state === "running");
+    const fraction = jobs.reduce((sum, j) => sum + jobFraction(j), 0) / jobs.length;
+    // Time left: each job's own estimate (download left plus converting time),
+    // spread over the jobs that run at once; once there is real progress, blend
+    // in the pace seen so far.
+    const remaining = jobs.map(jobRemaining);
+    const known = remaining.every((r) => r != null);
+    const lanes = Math.max(1, Math.min(this.prefs.concurrency || 2, jobs.length - finished));
+    const sum = remaining.reduce<number>((a, r) => a + (r ?? 0), 0);
+    const longest = Math.max(0, ...remaining.map((r) => r ?? 0));
+    let eta: number | null = known ? Math.max(longest, sum / lanes) : null;
+    const elapsed = (Date.now() - b.started) / 1000;
+    if (fraction > 0.25 && elapsed > 5) {
+      const paced = (elapsed / fraction) * (1 - fraction);
+      eta = eta == null ? paced : eta * 0.6 + paced * 0.4;
+    }
+    return {
+      total: jobs.length,
+      finished,
+      downloading: running.filter((j) => j.progress?.downloading).length,
+      converting: running.filter((j) => !j.progress?.downloading).length,
+      waiting: jobs.filter((j) => j.state === "queued").length,
+      fraction: finished === jobs.length ? 1 : fraction,
+      eta: finished === jobs.length ? 0 : eta,
+      active: finished < jobs.length,
+    };
+  });
 
   async init() {
     this.applyPrefs();
@@ -548,15 +614,21 @@ export class AppState {
                 url: it.path,
                 title: it.link?.title ?? it.name,
                 duration: it.link?.duration ?? null,
+                maxHeight: this.prefs.quality,
                 settings: this.settingsFor(it),
                 outputDir: this.prefs.outputDir,
               }
             : { input: it.path, settings: this.settingsFor(it), outputDir: this.prefs.outputDir },
         );
-        this.jobs[snap.id] = snap;
+        // Events for this job may already have arrived (it can start before the
+        // reply does); keep the newer state.
+        if (!this.jobs[snap.id]) this.jobs[snap.id] = snap;
         const cur = this.item(it.key);
         if (cur) cur.jobId = snap.id;
         queued++;
+        // Join the running batch, or start a new one.
+        if (this.batchProgress?.active && this.batch) this.batch.ids.push(snap.id);
+        else this.batch = { ids: [snap.id], started: Date.now() };
       } catch (e) {
         this.toast("error", `${it.name}: ${e instanceof Error ? e.message : e}`);
       }
@@ -584,7 +656,10 @@ export class AppState {
         break;
       case "progress": {
         const j = this.jobs[e.id];
-        if (j) j.progress = e.progress;
+        if (j) {
+          j.progress = e.progress;
+          if (j.state === "queued") j.state = "running";
+        }
         break;
       }
       case "removed":

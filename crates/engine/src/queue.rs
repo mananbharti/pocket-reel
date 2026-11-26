@@ -5,12 +5,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 use crate::classic;
-use crate::download::{safe_file_stem, Downloader, RemoteInfo};
+use crate::download::{safe_file_stem, DownloadProgress, Downloader, RemoteInfo, DEFAULT_MAX_HEIGHT};
 use crate::error::{Error, Result};
 use crate::plan::{self, ffmpeg_args, output_path, partial_path, Estimate, Plan, Settings};
 use crate::probe::{self, MediaInfo};
@@ -38,6 +38,10 @@ pub struct JobRequest {
     /// Length in seconds, if known before downloading.
     #[serde(default)]
     pub duration: Option<f64>,
+    /// Download quality for links: the tallest video to fetch, in pixels
+    /// (360 when missing; 0 = the best available).
+    #[serde(default)]
+    pub max_height: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -397,19 +401,33 @@ impl Engine {
                     let dir = work.join(format!("job-{id}-{}", std::process::id()));
                     work_dir = Some(dir.clone());
                     let t0 = Instant::now();
-                    let mut emit = |fraction: f64, eta: Option<f64>| {
+                    let mut last_emit: Option<Instant> = None;
+                    let mut emit = |d: DownloadProgress| {
+                        // At most ~8 updates a second, but always the first and last.
+                        let now = Instant::now();
+                        if d.fraction < 1.0 && last_emit.is_some_and(|t| now.duration_since(t) < Duration::from_millis(120)) {
+                            return;
+                        }
+                        last_emit = Some(now);
                         on_progress(Progress {
-                            fraction,
+                            fraction: d.fraction,
                             downloading: true,
                             media_seconds: 0.0,
                             speed: 0.0,
-                            eta_seconds: eta,
+                            eta_seconds: d.eta,
                             elapsed_seconds: t0.elapsed().as_secs_f64(),
-                            bytes: 0,
+                            bytes: d.downloaded,
+                            total_bytes: d.total,
+                            bytes_per_second: d.speed,
                         });
                     };
-                    emit(0.0, None);
-                    let file = downloader.download(url, &dir, &cancel, &mut emit)?;
+                    emit(DownloadProgress::default());
+                    let max_height = match request.max_height {
+                        Some(0) => None,
+                        Some(h) => Some(h),
+                        None => Some(DEFAULT_MAX_HEIGHT),
+                    };
+                    let file = downloader.download(url, &dir, max_height, &cancel, &mut emit)?;
                     let media = probe::probe(&self.inner.tools, &file)?;
                     let plan = plan::resolve(&self.inner.tools, &request.settings, &media)?;
                     self.update(id, |s| {

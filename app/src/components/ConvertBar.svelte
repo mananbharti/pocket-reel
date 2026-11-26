@@ -1,15 +1,39 @@
 <script lang="ts">
   import { app } from "../lib/store.svelte";
-  import { bytes } from "../lib/format";
-  import { CLASSIC_SCREENS } from "../lib/screens";
+  import { slide } from "svelte/transition";
+  import { cubicOut } from "svelte/easing";
+  import { bytes, timeLeft } from "../lib/format";
+  import { CLASSIC_SCREENS, QUALITIES } from "../lib/screens";
   import Icon from "./Icon.svelte";
+  import ProgressBar from "./ProgressBar.svelte";
+
+  // Phones: short option names, with the recommendation in the field label.
+  let narrow = $state(false);
+  $effect(() => {
+    const mq = window.matchMedia("(max-width: 560px)");
+    narrow = mq.matches;
+    const on = () => (narrow = mq.matches);
+    mq.addEventListener("change", on);
+    return () => mq.removeEventListener("change", on);
+  });
+
+  const batch = $derived(app.batchProgress);
+  const batchPct = $derived(Math.floor((batch?.fraction ?? 0) * 100));
+  const batchWhat = $derived.by(() => {
+    if (!batch) return "";
+    const parts: string[] = [];
+    if (batch.downloading) parts.push(`Downloading ${batch.downloading}`);
+    if (batch.converting) parts.push(`Converting ${batch.converting}`);
+    if (batch.waiting) parts.push(`${batch.waiting} waiting`);
+    return parts.join(" · ") || "Finishing…";
+  });
 
   const count = $derived(app.pending.length || app.convertible.length);
   const again = $derived(!app.pending.length && app.convertible.length > 0);
   const busy = $derived(app.active.length > 0 && app.pending.length === 0);
   const label = $derived(
     busy
-      ? "Converting…"
+      ? `Working… ${batchPct}%`
       : count === 0
         ? "Convert"
         : again
@@ -25,6 +49,25 @@
 </script>
 
 <div class="bar">
+  {#if batch?.active}
+    <div class="overall" transition:slide={{ duration: 320, easing: cubicOut }} aria-live="polite">
+      <div class="ov-top num">
+        <span class="ov-what">{batchWhat}</span>
+        <span class="ov-count">{batch.finished} of {batch.total} done</span>
+      </div>
+      <ProgressBar
+        value={batch.fraction}
+        size="large"
+        stage={batch.downloading && !batch.converting ? "download" : "convert"}
+        label="All videos"
+        valueText="{batchPct}%, {timeLeft(batch.eta)}"
+      />
+      <div class="ov-bottom num">
+        <span>{batchPct}%</span>
+        <span class="ov-eta"><Icon name="clock" size={14} stroke={2} />{batch.eta === 0 ? "Done" : timeLeft(batch.eta)}</span>
+      </div>
+    </div>
+  {/if}
   <div class="opts">
     <label class="opt">
       <span class="lbl">Player screen</span>
@@ -34,6 +77,16 @@
         {/each}
       </select>
     </label>
+    {#if app.canDownload}
+      <label class="opt">
+        <span class="lbl">Link quality{narrow ? " · 360p best" : ""}</span>
+        <select value={app.prefs.quality} onchange={(e) => app.setPref("quality", Number(e.currentTarget.value))}>
+          {#each QUALITIES as q (q.value)}
+            <option value={q.value}>{narrow ? q.short : q.label}</option>
+          {/each}
+        </select>
+      </label>
+    {/if}
     {#if app.api?.supportsFolders}
       <div class="opt">
         <span class="lbl" id="save-lbl">Save to</span>
@@ -85,6 +138,42 @@
     backdrop-filter: saturate(180%) blur(20px);
     -webkit-backdrop-filter: saturate(180%) blur(20px);
     border-top: 1px solid var(--separator);
+  }
+  .overall {
+    flex: 1 0 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 12px 14px;
+    border-radius: var(--r-lg);
+    background: var(--bg-elevated);
+    border: 1px solid var(--separator);
+    box-shadow: var(--shadow-sm);
+  }
+  .ov-top,
+  .ov-bottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+  .ov-what {
+    font-weight: 650;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .ov-count,
+  .ov-bottom {
+    color: var(--text-2);
+  }
+  .ov-eta {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-weight: 650;
+    color: var(--text);
   }
   .opts {
     display: flex;
@@ -170,10 +259,19 @@
     min-width: 190px;
   }
   @media (max-width: 560px) {
-    .opts,
+    .opts {
+      width: 100%;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    }
     .opt,
     select {
       width: 100%;
+    }
+    select {
+      font-size: 14px;
+      padding: 0 26px 0 10px;
+      background-position: right 7px center;
     }
     .go-wrap {
       width: 100%;

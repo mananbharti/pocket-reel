@@ -19,9 +19,34 @@ use crate::progress::CancelToken;
 use crate::run::{collect_stderr, kill};
 use crate::tools::command;
 
-/// A small video plus audio is all a 160 x 120 player needs, and it downloads fast.
-/// Prefer H.264 + AAC (cheap to decode), fall back to anything up to 480p, then anything.
-pub const FORMAT: &str = "bv*[height<=360][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=480]+ba/b[height<=480]/b";
+/// Download quality used when none is chosen: plenty for a 160 x 120 player
+/// screen, and quick to download.
+pub const DEFAULT_MAX_HEIGHT: u32 = 360;
+
+/// yt-dlp format selection for a download no taller than `max_height`
+/// (`None` = the best available). Prefers H.264 + AAC, which is cheap to decode,
+/// then any video and audio up to that height, then whatever exists.
+pub fn format_for(max_height: Option<u32>) -> String {
+    match max_height {
+        Some(h) => format!("bv*[height<={h}][vcodec^=avc1]+ba[ext=m4a]/bv*[height<={h}]+ba/b[height<={h}]/wv*+ba/w"),
+        None => "bv*+ba/b".to_string(),
+    }
+}
+
+/// One download progress update.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct DownloadProgress {
+    /// 0.0 ..= 1.0 across all streams of the download.
+    pub fraction: f64,
+    /// Bytes downloaded so far (all streams).
+    pub downloaded: u64,
+    /// Expected size of the whole download, when known.
+    pub total: Option<u64>,
+    /// Bytes per second.
+    pub speed: Option<f64>,
+    /// Seconds left, when known.
+    pub eta: Option<f64>,
+}
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -38,13 +63,15 @@ pub struct RemoteInfo {
 pub trait Downloader: Send + Sync {
     fn info(&self, url: &str) -> Result<RemoteInfo>;
 
-    /// Download `url` into `dir` and return the file. `on_progress(fraction, eta)`.
+    /// Download `url` into `dir` no taller than `max_height` (`None` = best) and
+    /// return the file.
     fn download(
         &self,
         url: &str,
         dir: &Path,
+        max_height: Option<u32>,
         cancel: &CancelToken,
-        on_progress: &mut dyn FnMut(f64, Option<f64>),
+        on_progress: &mut dyn FnMut(DownloadProgress),
     ) -> Result<PathBuf>;
 }
 
@@ -139,20 +166,77 @@ pub struct StreamProgress {
     stream: usize,
     last_downloaded: u64,
     last_done: bool,
+    /// Bytes of the streams that already finished.
+    finished_bytes: u64,
+    last_total: Option<u64>,
 }
 
 impl StreamProgress {
-    pub fn update(&mut self, downloaded: u64, total: Option<u64>) -> Option<f64> {
+    /// Feed one stream's progress; returns the combined progress.
+    pub fn update(&mut self, downloaded: u64, total: Option<u64>, speed: Option<f64>, eta: Option<f64>) -> DownloadProgress {
         // A new stream starts when the byte count goes back down after one finished
         // (or drops a lot, if the finished line was missed).
         if downloaded < self.last_downloaded && (self.last_done || downloaded + 1024 < self.last_downloaded) {
             self.stream += 1;
+            self.finished_bytes += self.last_total.unwrap_or(self.last_downloaded).max(self.last_downloaded);
         }
         self.last_downloaded = downloaded;
+        self.last_total = total;
         self.last_done = total.is_some_and(|t| downloaded >= t);
-        let f = (downloaded as f64 / total?.max(1) as f64).clamp(0.0, 1.0);
-        Some(if self.stream == 0 { f * 0.82 } else { 0.82 + f * 0.16 })
+        let f = total.map(|t| (downloaded as f64 / t.max(1) as f64).clamp(0.0, 1.0));
+        let fraction = match (self.stream, f) {
+            (0, Some(f)) => f * 0.82,
+            (_, Some(f)) => 0.82 + f * 0.16,
+            (0, None) => 0.0,
+            (_, None) => 0.82,
+        };
+        DownloadProgress {
+            fraction,
+            downloaded: self.finished_bytes + downloaded,
+            total: total.map(|t| self.finished_bytes + t),
+            speed: speed.filter(|v| *v > 0.0),
+            eta: eta.filter(|v| *v >= 0.0),
+        }
     }
+}
+
+/// Parse a yt-dlp progress line such as
+/// `[download]  45.3% of ~  10.00MiB at    1.20MiB/s ETA 00:07 (frag 3/9)`
+/// into (percent, total bytes, bytes per second, seconds left).
+pub fn parse_progress_line(line: &str) -> Option<(f64, Option<u64>, Option<f64>, Option<f64>)> {
+    let rest = line.trim().strip_prefix("[download]")?.trim();
+    let (pct, rest) = rest.split_once('%')?;
+    let pct: f64 = pct.trim().parse().ok()?;
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    let after = |key: &str| {
+        let i = words.iter().position(|w| *w == key)?;
+        words[i + 1..].iter().find(|w| **w != "~").copied()
+    };
+    let total = after("of").and_then(parse_size).map(|b| b.round() as u64);
+    let speed = after("at").and_then(|v| parse_size(v.trim_end_matches("/s")));
+    let eta = after("ETA").and_then(|t| {
+        t.split(':').try_fold(0.0, |acc, part| part.parse::<f64>().ok().map(|n| acc * 60.0 + n))
+    });
+    Some((pct, total, speed, eta))
+}
+
+/// "10.00MiB" -> bytes.
+fn parse_size(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let split = s.find(|c: char| c.is_ascii_alphabetic())?;
+    let (n, unit) = s.split_at(split);
+    let n: f64 = n.parse().ok()?;
+    let mult = match unit {
+        "B" => 1.0,
+        "KiB" => 1024.0,
+        "MiB" => 1024.0 * 1024.0,
+        "GiB" => 1024.0 * 1024.0 * 1024.0,
+        "KB" | "kB" => 1000.0,
+        "MB" => 1e6,
+        "GB" => 1e9,
+        _ => return None,
+    };
+    Some(n * mult)
 }
 
 /// The yt-dlp command-line program.
@@ -279,16 +363,18 @@ impl Downloader for YtDlp {
         &self,
         url: &str,
         dir: &Path,
+        max_height: Option<u32>,
         cancel: &CancelToken,
-        on_progress: &mut dyn FnMut(f64, Option<f64>),
+        on_progress: &mut dyn FnMut(DownloadProgress),
     ) -> Result<PathBuf> {
         std::fs::create_dir_all(dir)?;
         let template = dir.join("%(id)s.%(ext)s");
+        let format = format_for(max_height);
         let mut child = command(&self.bin)
             .args(self.base_args())
             .args([
                 "-f",
-                FORMAT,
+                &format,
                 "--merge-output-format",
                 "mp4",
                 "--no-mtime",
@@ -296,7 +382,7 @@ impl Downloader for YtDlp {
                 "--newline",
                 "--progress",
                 "--progress-template",
-                "download:PRG %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s %(progress.eta)s",
+                "download:PRG %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s %(progress.eta)s %(progress.speed)s",
                 "--print",
                 "after_move:FILE %(filepath)s",
                 "-o",
@@ -332,11 +418,12 @@ impl Downloader for YtDlp {
                     if let Some(rest) = line.strip_prefix("PRG ") {
                         let mut it = rest.split_whitespace();
                         let done = num(it.next()).unwrap_or(0.0) as u64;
-                        let total = num(it.next()).or(num(it.next())).map(|t| t as u64);
+                        let exact = num(it.next());
+                        let estimate = num(it.next());
+                        let total = exact.or(estimate).map(|t| t as u64);
                         let eta = num(it.next());
-                        if let Some(f) = streams.update(done, total) {
-                            on_progress(f, eta);
-                        }
+                        let speed = num(it.next());
+                        on_progress(streams.update(done, total, speed, eta));
                     } else if let Some(p) = line.strip_prefix("FILE ") {
                         file = Some(PathBuf::from(p.trim()));
                     }
@@ -360,7 +447,8 @@ impl Downloader for YtDlp {
                 .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
         });
         let file = file.ok_or_else(|| Error::Download("The download finished but no video file was found.".into()))?;
-        on_progress(1.0, Some(0.0));
+        let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+        on_progress(DownloadProgress { fraction: 1.0, downloaded: size, total: Some(size), speed: None, eta: Some(0.0) });
         Ok(file)
     }
 }
@@ -397,10 +485,36 @@ mod tests {
     #[test]
     fn stream_progress_combines_video_and_audio() {
         let mut s = StreamProgress::default();
-        assert!((s.update(50, Some(100)).unwrap() - 0.41).abs() < 1e-9);
-        assert!((s.update(100, Some(100)).unwrap() - 0.82).abs() < 1e-9);
-        let a = s.update(10, Some(100)).unwrap();
-        assert!(a > 0.82 && a < 0.85);
+        assert!((s.update(50, Some(100), None, None).fraction - 0.41).abs() < 1e-9);
+        assert!((s.update(100, Some(100), None, None).fraction - 0.82).abs() < 1e-9);
+        let a = s.update(10, Some(40), Some(5.0), Some(3.0));
+        assert!(a.fraction > 0.82 && a.fraction < 0.9);
+        assert_eq!(a.downloaded, 110);
+        assert_eq!(a.total, Some(140));
+        assert_eq!(a.speed, Some(5.0));
+    }
+
+    #[test]
+    fn parses_progress_lines() {
+        let (p, total, speed, eta) =
+            parse_progress_line("[download]  45.3% of ~  10.00MiB at    1.50MiB/s ETA 01:07 (frag 3/9)").unwrap();
+        assert_eq!(p, 45.3);
+        assert_eq!(total, Some(10 * 1024 * 1024));
+        assert_eq!(speed, Some(1.5 * 1024.0 * 1024.0));
+        assert_eq!(eta, Some(67.0));
+        let (p, total, speed, eta) = parse_progress_line("[download] 100% of    3.20KiB in 00:00:01 at 2.00KiB/s").unwrap();
+        assert_eq!(p, 100.0);
+        assert_eq!(total, Some(3277));
+        assert_eq!(speed, Some(2048.0));
+        assert_eq!(eta, None);
+        assert!(parse_progress_line("[info] Downloading format 18").is_none());
+    }
+
+    #[test]
+    fn formats_by_quality() {
+        assert!(format_for(Some(360)).contains("height<=360"));
+        assert!(format_for(Some(720)).contains("height<=720"));
+        assert_eq!(format_for(None), "bv*+ba/b");
     }
 
     #[test]

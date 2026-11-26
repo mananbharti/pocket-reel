@@ -138,6 +138,10 @@ enum Cmd {
         /// Parallel jobs.
         #[arg(short, long, default_value_t = 1)]
         jobs: usize,
+        /// Download quality for links: tallest video in pixels (360, 480, 720,
+        /// 1080), or 0 for the best available.
+        #[arg(short, long, default_value_t = 360)]
+        quality: u32,
     },
     /// Serve the engine over HTTP for UI development.
     Serve {
@@ -237,7 +241,7 @@ fn run() -> Result<(), String> {
             let i = y.info(&url).map_err(|e| e.to_string())?;
             println!("{}\n  {}  {}", i.title, fmt_time(i.duration.unwrap_or(0.0)), i.uploader.unwrap_or_default());
         }
-        Cmd::Convert { files, opts, out, overwrite, jobs } => {
+        Cmd::Convert { files, opts, out, overwrite, jobs, quality } => {
             let t = tools()?;
             let ytdlp = YtDlp::locate(&[], &t.ffmpeg);
             let (tx, rx) = mpsc::channel();
@@ -275,6 +279,7 @@ fn run() -> Result<(), String> {
                     url: link,
                     title,
                     duration,
+                    max_height: Some(quality),
                 };
                 match engine.enqueue(req) {
                     Ok(s) => ids.push(s.id),
@@ -287,7 +292,15 @@ fn run() -> Result<(), String> {
                 let Ok(ev) = rx.recv() else { break };
                 match ev {
                     Event::Progress { id, progress } if progress.downloading => {
-                        eprint!("\r  job {id}: downloading {:5.1}%   ", progress.fraction * 100.0);
+                        let speed = progress
+                            .bytes_per_second
+                            .map(|b| format!("{}/s", format_bytes(b as u64)))
+                            .unwrap_or_default();
+                        eprint!(
+                            "\r  job {id}: downloading {:5.1}%  {}  {speed}   ",
+                            progress.fraction * 100.0,
+                            format_bytes(progress.bytes)
+                        );
                         let _ = std::io::stderr().flush();
                     }
                     Event::Progress { id, progress } => {

@@ -1,25 +1,15 @@
 <script lang="ts">
   import { app } from "../lib/store.svelte";
-  import { remaining } from "../lib/format";
+  import { timeLeft } from "../lib/format";
   import Icon from "./Icon.svelte";
   import Logo from "./Logo.svelte";
 
+  // Same estimate as the overall progress panel.
   const status = $derived.by(() => {
-    const total = app.active.length;
-    if (!total) return null;
-    const running = app.active.filter((j) => j.state === "running");
-    const speed = running.length ? running.reduce((s, j) => s + (j.progress?.speed ?? 0), 0) / running.length : 0;
-    let secs = 0;
-    let known = true;
-    for (const j of app.active) {
-      if (j.state === "running") {
-        if (j.progress?.etaSeconds == null) known = false;
-        else secs += j.progress.etaSeconds;
-      } else if (speed > 0) secs += j.duration / speed;
-      else known = false;
-    }
-    const parallel = Math.max(1, Math.min(app.prefs.concurrency, total));
-    return known ? remaining(secs / parallel) : "Converting…";
+    const b = app.batchProgress;
+    if (!b?.active) return app.active.length ? "Working…" : null;
+    const doing = b.downloading && !b.converting ? "Downloading" : "Converting";
+    return `${doing} · ${Math.floor(b.fraction * 100)}% · ${timeLeft(b.eta)}`;
   });
 </script>
 

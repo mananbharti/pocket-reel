@@ -37,7 +37,12 @@ pub struct Progress {
     /// Estimated seconds remaining, once enough data is available.
     pub eta_seconds: Option<f64>,
     pub elapsed_seconds: f64,
+    /// Bytes written (converting) or downloaded (downloading) so far.
     pub bytes: u64,
+    /// While downloading: the expected size of the download, when known.
+    pub total_bytes: Option<u64>,
+    /// While downloading: bytes per second.
+    pub bytes_per_second: Option<f64>,
 }
 
 /// Turns raw "media seconds done" samples into smoothed progress updates.
@@ -98,7 +103,17 @@ impl Tracker {
         } else {
             None
         };
-        Progress { fraction, downloading: false, media_seconds: media_done, speed: rate.max(0.0), eta_seconds: eta, elapsed_seconds: elapsed, bytes }
+        Progress {
+            fraction,
+            downloading: false,
+            media_seconds: media_done,
+            speed: rate.max(0.0),
+            eta_seconds: eta,
+            elapsed_seconds: elapsed,
+            bytes,
+            total_bytes: None,
+            bytes_per_second: None,
+        }
     }
 
     /// Final 100% update.

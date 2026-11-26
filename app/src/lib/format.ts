@@ -114,3 +114,19 @@ export function codecName(c: string): string {
   };
   return map[c] ?? c.toUpperCase();
 }
+
+/** Short time-left label: "12 sec left", "3 min left", "1 h 5 min left". */
+export function timeLeft(seconds: number | null | undefined): string {
+  if (seconds == null || !isFinite(seconds)) return "Working out time…";
+  if (seconds < 3) return "Almost done";
+  if (seconds < 60) return `${Math.max(3, Math.round(seconds))} sec left`;
+  const m = Math.round(seconds / 60);
+  if (m < 60) return `${m} min left`;
+  const h = Math.floor(m / 60);
+  return `${h} h ${m % 60} min left`;
+}
+
+/** "1.2 MB/s" */
+export function speed(bytesPerSecond: number | null | undefined): string {
+  return bytesPerSecond ? `${bytes(bytesPerSecond)}/s` : "";
+}

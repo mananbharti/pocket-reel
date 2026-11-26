@@ -1,6 +1,8 @@
 <script lang="ts">
-  import { app, type Item } from "../lib/store.svelte";
-  import { bytes, bytesSpoken, clock, durationWords, remaining } from "../lib/format";
+  import { app, jobRemaining, type Item } from "../lib/store.svelte";
+  import { Tween } from "svelte/motion";
+  import { cubicOut } from "svelte/easing";
+  import { bytes, bytesSpoken, clock, durationWords, remaining, speed, timeLeft } from "../lib/format";
   import Icon from "./Icon.svelte";
   import ProgressBar from "./ProgressBar.svelte";
 
@@ -19,6 +21,35 @@
   });
   const length = $derived(item.isLink ? item.link?.duration : item.media?.duration);
   const downloading = $derived(job?.state === "running" && !!job.progress?.downloading);
+  const running = $derived(job?.state === "running");
+  // Before the first bytes arrive (YouTube needs a few seconds to get started).
+  const connecting = $derived(downloading && !job?.progress?.bytes && !job?.progress?.fraction);
+  const stage = $derived(running ? (downloading ? "download" : "convert") : null);
+  const stepLabel = $derived(item.isLink && running ? (downloading ? "Step 1 of 2" : "Step 2 of 2") : "");
+  // Whole time left for this video: what's left to download plus converting.
+  const eta = $derived(job ? jobRemaining(job) : null);
+
+  /** Size and speed while downloading; speed versus playback while converting. */
+  const detail = $derived.by(() => {
+    const p = job?.progress;
+    if (!p || !running) return "";
+    if (downloading) {
+      if (connecting) return "Finding the video…";
+      const size = p.bytes ? (p.totalBytes ? `${bytes(p.bytes)} of ${bytes(p.totalBytes)}` : bytes(p.bytes)) : "Starting…";
+      const rate = speed(p.bytesPerSecond);
+      return rate ? `${size} · ${rate}` : size;
+    }
+    if (p.speed > 0) return `${p.speed >= 10 ? Math.round(p.speed) : p.speed.toFixed(1)}× playback speed`;
+    return "Starting…";
+  });
+
+  // The ring on the thumbnail glides between updates.
+  const ring = new Tween(0, { duration: 600, easing: cubicOut });
+  $effect(() => {
+    const v = running ? (job?.progress?.fraction ?? 0) : 0;
+    ring.set(v, v < ring.current - 0.02 ? { duration: 0 } : undefined);
+  });
+  const RING = 2 * Math.PI * 17;
 
   const status = $derived.by(() => {
     if (item.status === "probing") return item.isLink ? "Getting video details…" : "Reading…";
@@ -27,9 +58,10 @@
       if (item.isLink) return `From ${site}${length ? ` · ${clock(length)}` : ""}`;
       return item.estimate && !item.estimating ? `${clock(length)} · about ${bytes(item.estimate.bytes)}` : clock(length);
     }
-    if (job.state === "queued") return "Waiting…";
-    if (downloading) return `Downloading ${pct}% · ${remaining(job.progress?.etaSeconds)}`;
-    if (job.state === "running") return `Converting ${pct}% · ${remaining(job.progress?.etaSeconds)}`;
+    if (job.state === "queued") return "Waiting to start…";
+    if (connecting) return `Connecting to ${site}…`;
+    if (downloading) return `Downloading ${pct}%`;
+    if (job.state === "running") return `Converting ${pct}%`;
     if (job.state === "done") return `Ready for your player · ${bytes(job.outputBytes)}`;
     if (job.state === "canceled") return "Stopped";
     return job.error ?? "Couldn't convert";
@@ -52,7 +84,7 @@
   );
 </script>
 
-<div class="row {tone}" role="group" aria-label={spoken}>
+<div class="row {tone}" class:running class:queued={job?.state === "queued"} role="group" aria-label={spoken}>
   <span class="thumb" aria-hidden="true">
     {#if item.thumb}
       <img src={item.thumb} alt="" />
@@ -61,6 +93,15 @@
     {:else}
       <Icon name={item.isLink ? "globe" : "film"} size={22} stroke={1.6} />
     {/if}
+    {#if running}
+      <span class="busy {stage}">
+        <svg viewBox="0 0 40 40" class="ring">
+          <circle cx="20" cy="20" r="17" class="track" />
+          <circle cx="20" cy="20" r="17" class="arc" stroke-dasharray={RING} stroke-dashoffset={RING * (1 - ring.current)} />
+        </svg>
+        <span class="glyph"><Icon name={downloading ? "arrowDown" : "film"} size={14} stroke={2.4} /></span>
+      </span>
+    {/if}
     {#if job?.state === "done"}
       <span class="tick"><Icon name="check" size={16} stroke={3} /></span>
     {/if}
@@ -68,13 +109,23 @@
 
   <span class="info">
     <span class="name" title={item.isLink ? item.path : undefined}>{item.name}</span>
-    <span class="status num">{status}</span>
+    <span class="status num">
+      {#if stepLabel}<span class="step {stage}">{stepLabel}</span>{/if}
+      {#key stage}<span class="stage-text">{status}</span>{/key}
+    </span>
     {#if busy}
       <ProgressBar
-        value={job?.state === "queued" ? 0 : (job?.progress?.fraction ?? 0)}
-        label="Converting {item.name}"
-        valueText={job?.state === "queued" ? "Waiting" : `${downloading ? "Downloading" : "Converting"} ${pct}%, ${remaining(job?.progress?.etaSeconds)}`}
+        value={job?.state === "queued" || connecting ? null : (job?.progress?.fraction ?? 0)}
+        {stage}
+        label="{downloading ? 'Downloading' : 'Converting'} {item.name}"
+        valueText={job?.state === "queued" ? "Waiting" : `${downloading ? "Downloading" : "Converting"} ${pct}%, ${remaining(eta)}`}
       />
+      {#if running}
+        <span class="meta num">
+          <span class="detail">{detail}</span>
+          <span class="left"><Icon name="clock" size={13} stroke={2} />{timeLeft(eta)}</span>
+        </span>
+      {/if}
     {/if}
   </span>
 
@@ -183,6 +234,149 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .row {
+    transition: border-color var(--t-med) var(--ease-out), box-shadow var(--t-med) var(--ease-out),
+      background-color var(--t-med);
+  }
+  .row.running {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--separator));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent), var(--shadow-sm);
+  }
+  .row.good {
+    animation: done-glow 1.1s var(--ease-out);
+  }
+  @keyframes done-glow {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 55%, transparent);
+    }
+    100% {
+      box-shadow: 0 0 0 14px transparent;
+    }
+  }
+  .queued .status {
+    animation: breathe 1.8s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    50% {
+      opacity: 0.45;
+    }
+  }
+  .busy {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: rgba(0, 0, 0, 0.42);
+    color: #fff;
+    animation: fadein var(--t-med) var(--ease-out);
+  }
+  .ring {
+    width: 40px;
+    height: 40px;
+    transform: rotate(-90deg);
+    grid-area: 1 / 1;
+  }
+  .ring circle {
+    fill: none;
+    stroke-width: 3.4;
+  }
+  .ring .track {
+    stroke: rgba(255, 255, 255, 0.25);
+  }
+  .ring .arc {
+    stroke: #fff;
+    stroke-linecap: round;
+  }
+  .glyph {
+    grid-area: 1 / 1;
+    display: grid;
+    place-items: center;
+  }
+  .download .glyph {
+    animation: drop 1.1s var(--ease-in-out, ease-in-out) infinite;
+  }
+  @keyframes drop {
+    0% {
+      transform: translateY(-5px);
+      opacity: 0;
+    }
+    35%,
+    70% {
+      transform: translateY(0);
+      opacity: 1;
+    }
+    100% {
+      transform: translateY(5px);
+      opacity: 0;
+    }
+  }
+  .convert .glyph {
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    50% {
+      transform: scale(0.82);
+    }
+  }
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .stage-text {
+    animation: rise var(--t-slow) var(--ease-out);
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(5px);
+    }
+  }
+  .step {
+    flex: none;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 2px 7px;
+    border-radius: 999px;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 13%, transparent);
+    transition: color var(--t-med), background-color var(--t-med);
+  }
+  .step.convert {
+    color: var(--success);
+    background: color-mix(in srgb, var(--success) 14%, transparent);
+  }
+  .meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 12px;
+    color: var(--text-2);
+  }
+  .meta .detail {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .meta .left {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-weight: 600;
+    color: var(--text);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .download .glyph,
+    .convert .glyph,
+    .queued .status,
+    .row.good {
+      animation: none;
+    }
   }
   .good .status {
     color: var(--success);

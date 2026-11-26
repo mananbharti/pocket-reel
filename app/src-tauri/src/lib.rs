@@ -381,7 +381,9 @@ mod mobile {
     use std::sync::mpsc;
     use std::time::{Duration, SystemTime};
 
-    use pocketreel_engine::download::{friendly_error, parse_info, Downloader, RemoteInfo};
+    use pocketreel_engine::download::{
+        format_for, friendly_error, parse_info, parse_progress_line, DownloadProgress, Downloader, RemoteInfo, StreamProgress,
+    };
     use pocketreel_engine::{CancelToken, Error, Result};
     use serde::Deserialize;
     use serde_json::json;
@@ -408,6 +410,8 @@ mod mobile {
     struct ProgResp {
         progress: f64,
         eta: i64,
+        #[serde(default)]
+        line: String,
     }
 
     pub struct MobileYtdl {
@@ -452,8 +456,9 @@ mod mobile {
             &self,
             url: &str,
             dir: &Path,
+            max_height: Option<u32>,
             cancel: &CancelToken,
-            on_progress: &mut dyn FnMut(f64, Option<f64>),
+            on_progress: &mut dyn FnMut(DownloadProgress),
         ) -> Result<PathBuf> {
             std::fs::create_dir_all(dir)?;
             let id = format!(
@@ -462,13 +467,14 @@ mod mobile {
             );
             let (tx, rx) = mpsc::channel();
             let h = self.handle.clone();
-            let args = json!({ "url": url, "dir": dir.to_string_lossy(), "id": id });
+            let args = json!({ "url": url, "dir": dir.to_string_lossy(), "id": id, "format": format_for(max_height) });
             std::thread::spawn(move || {
                 let _ = tx.send(h.run_mobile_plugin::<PathResp>("download", args));
             });
-            // youtubedl-android reports percent per stream; video first, then audio.
-            let mut stream = 0usize;
-            let mut last = 0.0f64;
+            // youtubedl-android reports each stream's percent (video first, then
+            // audio) and the raw yt-dlp line, which also has the size and speed.
+            let mut streams = StreamProgress::default();
+            let mut last_line = String::new();
             loop {
                 if cancel.is_canceled() {
                     let _ = self.handle.run_mobile_plugin::<serde_json::Value>("cancel", json!({ "id": id }));
@@ -484,19 +490,33 @@ mod mobile {
                             .map(PathBuf::from)
                             .filter(|p| p.is_file())
                             .ok_or_else(|| Error::Download("The download finished but no video file was found.".into()))?;
-                        on_progress(1.0, Some(0.0));
+                        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                        on_progress(DownloadProgress { fraction: 1.0, downloaded: size, total: Some(size), speed: None, eta: Some(0.0) });
                         return Ok(path);
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         if let Ok(p) = self.handle.run_mobile_plugin::<ProgResp>("progress", json!({ "id": id })) {
-                            let pct = p.progress.clamp(0.0, 100.0);
-                            if pct + 5.0 < last {
-                                stream += 1;
+                            if p.line == last_line && !p.line.is_empty() {
+                                continue;
                             }
-                            last = pct;
-                            let f = pct / 100.0;
-                            let overall = if stream == 0 { f * 0.82 } else { 0.82 + f * 0.16 };
-                            on_progress(overall, (p.eta >= 0).then_some(p.eta as f64));
+                            last_line = p.line.clone();
+                            let pct = p.progress.clamp(0.0, 100.0);
+                            let parsed = parse_progress_line(&p.line);
+                            let total = parsed.and_then(|x| x.1);
+                            let speed = parsed.and_then(|x| x.2);
+                            let eta = (p.eta >= 0).then_some(p.eta as f64).or(parsed.and_then(|x| x.3));
+                            let done = match total {
+                                Some(t) => (t as f64 * pct / 100.0) as u64,
+                                // No size known: track percent in "bytes" of a 100-byte stream.
+                                None => pct as u64,
+                            };
+                            let mut d = streams.update(done, total.or(Some(100)), speed, eta);
+                            if total.is_none() {
+                                // Percent only; don't show it as a size.
+                                d.downloaded = 0;
+                                d.total = None;
+                            }
+                            on_progress(d);
                         }
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => {

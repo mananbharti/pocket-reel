@@ -205,7 +205,7 @@ while time.time() < deadline and not linked and not failure:
         for i, t in enumerate(texts):
             if t.startswith("http://10.0.2.2") and i + 1 < len(texts):
                 nxt = texts[i + 1]
-                if not re.match(r"(From |Getting|Downloading|Converting|Waiting|Ready)", nxt):
+                if re.search(r"couldn.t|can.t|fail|isn.t|error|unable|not found|stopped", nxt, re.I):
                     failure = nxt
         time.sleep(3)
 time.sleep(2)

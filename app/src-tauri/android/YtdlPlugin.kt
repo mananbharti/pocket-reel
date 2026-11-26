@@ -31,6 +31,7 @@ class DownloadArgs {
     lateinit var url: String
     lateinit var dir: String
     lateinit var id: String
+    var format: String? = null
 }
 
 @InvokeArg
@@ -42,7 +43,7 @@ class IdArgs {
 class YtdlPlugin(private val activity: Activity) : Plugin(activity) {
     @Volatile private var pendingShare: String? = null
     @Volatile private var ready = false
-    private val progress = ConcurrentHashMap<String, Pair<Float, Long>>()
+    private val progress = ConcurrentHashMap<String, Triple<Float, Long, String>>()
 
     override fun load(webView: WebView) {
         super.load(webView)
@@ -115,16 +116,16 @@ class YtdlPlugin(private val activity: Activity) : Plugin(activity) {
                 dir.mkdirs()
                 val request = YoutubeDLRequest(args.url)
                 request.addOption("--no-playlist")
-                request.addOption("-f", FORMAT)
+                request.addOption("-f", args.format ?: FORMAT)
                 request.addOption("--merge-output-format", "mp4")
                 request.addOption("--no-mtime")
                 request.addOption("-o", File(dir, "%(id)s.%(ext)s").absolutePath)
                 request.addOption("--print", "after_move:FILE %(filepath)s")
                 request.addOption("--progress")
                 request.addOption("--newline")
-                progress[args.id] = Pair(0f, -1L)
-                val response = YoutubeDL.getInstance().execute(request, args.id) { p, eta, _ ->
-                    progress[args.id] = Pair(p, eta)
+                progress[args.id] = Triple(0f, -1L, "")
+                val response = YoutubeDL.getInstance().execute(request, args.id) { p, eta, line ->
+                    progress[args.id] = Triple(p, eta, line)
                 }
                 val path = response.out.lines().lastOrNull { it.startsWith("FILE ") }?.removePrefix("FILE ")?.trim()
                     ?: dir.listFiles()?.filter { it.isFile }?.maxByOrNull { it.lastModified() }?.absolutePath
@@ -149,6 +150,7 @@ class YtdlPlugin(private val activity: Activity) : Plugin(activity) {
         val r = JSObject()
         r.put("progress", (p?.first ?: 0f).toDouble())
         r.put("eta", p?.second ?: -1L)
+        r.put("line", p?.third ?: "")
         r.put("active", p != null)
         invoke.resolve(r)
     }

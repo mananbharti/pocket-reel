@@ -149,6 +149,10 @@ export interface Progress {
   fraction: number;
   /** True while a link is being downloaded, before converting. */
   downloading: boolean;
+  /** While downloading: expected size of the download, when known. */
+  totalBytes: number | null;
+  /** While downloading: bytes per second. */
+  bytesPerSecond: number | null;
   mediaSeconds: number;
   speed: number;
   etaSeconds: number | null;
@@ -183,6 +187,8 @@ export interface JobRequest {
   url?: string | null;
   title?: string | null;
   duration?: number | null;
+  /** Download quality for links: tallest video in pixels, 0 = best. */
+  maxHeight?: number | null;
 }
 
 export interface RemoteInfo {
