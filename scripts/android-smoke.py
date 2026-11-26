@@ -89,7 +89,14 @@ subprocess.run(
     ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=25:duration=8",
      "-f", "lavfi", "-i", "sine=f=440:d=8", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
      "sample.mp4"], check=True)
-adb("push", "sample.mp4", "/sdcard/Download/sample.mp4")
+for attempt in range(20):
+    # Shared storage mounts a little after boot completes.
+    r = subprocess.run(["adb", "push", "sample.mp4", "/sdcard/Download/sample.mp4"], capture_output=True, text=True)
+    if r.returncode == 0:
+        break
+    time.sleep(3)
+else:
+    raise SystemExit("Could not copy the sample to the emulator: " + r.stderr)
 adb("shell", "am", "broadcast", "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
     "-d", "file:///sdcard/Download/sample.mp4", check=False)
 adb("shell", "content", "call", "--uri", "content://media", "--method", "scan_volume",
