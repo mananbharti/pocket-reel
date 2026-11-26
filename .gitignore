@@ -1,0 +1,13 @@
+/target
+node_modules/
+dist/
+.DS_Store
+*.part
+/app/src-tauri/gen/
+/app/src-tauri/target/
+/app/src-tauri/binaries/
+/app/src-tauri/resources/ffmpeg/
+/.vite/
+*.log
+.env
+.env.*
