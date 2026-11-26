@@ -110,7 +110,7 @@ Every frame is a complete baseline JPEG stored as chunk `00dc`:
 - `SOF0`: 8-bit, 3 components, Y sampling `2×2`, Cb/Cr `1×1` → **YCbCr 4:2:0**
 - Four **standard Annex K Huffman tables** (DC/AC luma/chroma), repeated in every frame
 - `SOS`, entropy-coded data, `EOI`
-- RGB → YCbCr uses fixed-point lookup tables (exact coefficients *Unknown*; standard JFIF full-range BT.601 is *Inferred*)
+- RGB → YCbCr uses 14-bit fixed-point lookup tables at `0xF280`/`0xFB40`/`0xFF90` whose per-step increments are 2765, 6860 and 1332, i.e. 0.1687, 0.4187 and 0.0813: the standard **JFIF full-range BT.601** coefficients (Observed)
 - Chunk payload is zero-padded so the next chunk starts on a **4-byte boundary**; the chunk size field excludes this padding.
 
 ### 3.5 Audio stream (Observed)
@@ -195,6 +195,6 @@ no MP3 extraction, no modern formats, temp files written to `C:\`.
 - No decompiler engine (Ghidra/IDA) was available, so code was read as assembly.
 - Nothing was executed. Runtime behaviour (for example which decode path a given
   MP4 takes) is *Inferred* from code, not observed.
-- Open questions: exact RGB→YCbCr coefficients; DirectShow-path scaling; the
+- Open questions: DirectShow-path scaling; the
   meaning of `ACOE=1.0` (likely an audio gain coefficient); the value stored in
   `avih.dwReserved[3]` when a fragment is cut.
