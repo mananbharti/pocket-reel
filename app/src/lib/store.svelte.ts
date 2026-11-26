@@ -22,6 +22,8 @@ export interface Prefs {
   concurrency: number;
   preset: string;
   outputDir: string | null;
+  /** Player screen size, "WIDTHxHEIGHT". */
+  screen: string;
 }
 
 const PREFS_KEY = "pocketreel.prefs";
@@ -31,9 +33,10 @@ function loadPrefs(): Prefs {
     theme: "auto",
     contrast: "normal",
     motion: "system",
-    concurrency: 1,
+    concurrency: 2,
     preset: "classic-avi",
     outputDir: null,
+    screen: "160x120",
   };
   try {
     return { ...defaults, ...JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") };
@@ -122,8 +125,8 @@ export class AppState {
       this.info = info;
       if (info.engineError) this.fatal = info.engineError;
       this.presets = presets;
-      const saved = presets.find((p) => p.id === this.prefs.preset && p.available);
-      this.settings = { preset: saved ? saved.id : "classic-avi" };
+      // One job only: the MP3 player's own AVI format at the player's screen size.
+      this.settings = this.screenSettings();
       this.api.onEvent((e) => this.onEvent(e));
       this.api.onDrop({
         over: (a) => (this.dragActive = a),
@@ -131,7 +134,7 @@ export class AppState {
       });
       const existing = await this.api.jobs();
       for (const j of existing) this.jobs[j.id] = j;
-      if (this.prefs.concurrency > 1) this.api.setConcurrency(this.prefs.concurrency);
+      this.api.setConcurrency(this.prefs.concurrency);
       this.ready = true;
     } catch (e) {
       this.fatal = e instanceof Error ? e.message : String(e);
@@ -390,9 +393,20 @@ export class AppState {
     await Promise.all([worker(), worker()]);
   }
 
-  schedulePreview(delay = 220) {
-    if (this.previewTimer) clearTimeout(this.previewTimer);
-    this.previewTimer = setTimeout(() => this.runPreview(), delay);
+  screenSettings(): Settings {
+    const [w, h] = this.prefs.screen.split("x").map(Number);
+    return { preset: "classic-avi", width: w || 160, height: h || 120 };
+  }
+
+  setScreen(value: string) {
+    this.setPref("screen", value);
+    this.settings = this.screenSettings();
+    this.scheduleEstimates(0);
+    this.announce(`Player screen ${value.replace("x", " by ")}.`);
+  }
+
+  schedulePreview(_delay = 220) {
+    // The simple app shows no preview; kept so callers stay unchanged.
   }
 
   setPreviewAt(t: number) {
@@ -490,7 +504,6 @@ export class AppState {
     const name = j.fileName;
     if (j.state === "done") {
       this.announce(`${name} converted, ${bytesSpoken(j.outputBytes)}.`);
-      this.toast("success", `${basename(j.output)} · ${bytes(j.outputBytes)}`);
     } else if (j.state === "failed") {
       this.announce(`${name} failed. ${j.error ?? ""}`);
       this.toast("error", `${name}: ${j.error ?? "Conversion failed"}`, 7000);

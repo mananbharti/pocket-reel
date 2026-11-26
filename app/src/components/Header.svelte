@@ -4,13 +4,10 @@
   import Icon from "./Icon.svelte";
   import Logo from "./Logo.svelte";
 
-  let { onprefs }: { onprefs: () => void } = $props();
-
-  const running = $derived(app.active.filter((j) => j.state === "running"));
   const status = $derived.by(() => {
     const total = app.active.length;
     if (!total) return null;
-    // Remaining time across the whole queue: running ETAs plus queued durations at the observed speed.
+    const running = app.active.filter((j) => j.state === "running");
     const speed = running.length ? running.reduce((s, j) => s + (j.progress?.speed ?? 0), 0) / running.length : 0;
     let secs = 0;
     let known = true;
@@ -22,66 +19,70 @@
       else known = false;
     }
     const parallel = Math.max(1, Math.min(app.prefs.concurrency, total));
-    return {
-      text: `Converting ${total} file${total === 1 ? "" : "s"}`,
-      eta: known ? remaining(secs / parallel) : "Estimating time…",
-    };
+    return known ? remaining(secs / parallel) : "Converting…";
   });
 </script>
 
 <header class="top">
-  <div class="brand">
-    <Logo size={30} />
-    <h1>Pocket Reel</h1>
-  </div>
-  <div class="status" aria-hidden="true">
+  <div class="inner">
+    <div class="brand">
+      <Logo size={32} />
+      <div class="names">
+        <h1>Pocket Reel</h1>
+        <span class="sub">Videos for your MP3 player</span>
+      </div>
+    </div>
     {#if status}
-      <span class="pulse"></span>
-      <span class="s1">{status.text}</span>
-      <span class="s2 num">{status.eta}</span>
+      <span class="status num" aria-hidden="true"><span class="pulse"></span>{status}</span>
     {/if}
-  </div>
-  <div class="actions">
-    <button type="button" class="btn add" onclick={() => app.pickFiles()} aria-keyshortcuts="Control+O">
-      <Icon name="plus" size={18} />
-      <span>Add Videos</span>
-    </button>
-    <button type="button" class="btn icon plain" aria-label="Preferences" onclick={onprefs}>
-      <Icon name="sliders" size={20} />
-    </button>
+    {#if app.ready && app.items.length > 0}
+      <button type="button" class="btn add" onclick={() => app.pickFiles()} aria-keyshortcuts="Control+O">
+        <Icon name="plus" size={18} />
+        <span>Add videos</span>
+      </button>
+    {/if}
   </div>
 </header>
 
 <style>
   .top {
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    align-items: center;
-    gap: 12px;
-    height: 56px;
-    padding: 0 16px 0 18px;
-    padding-top: env(safe-area-inset-top);
-    box-sizing: content-box;
+    padding-top: calc(env(safe-area-inset-top) + var(--status-top, 0px));
     background: var(--material);
     backdrop-filter: saturate(180%) blur(20px);
     -webkit-backdrop-filter: saturate(180%) blur(20px);
     border-bottom: 1px solid var(--separator);
-    position: relative;
-    z-index: 5;
+  }
+  .inner {
+    max-width: 760px;
+    margin: 0 auto;
+    height: 64px;
+    padding: 0 20px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
   }
   .brand {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 11px;
     min-width: 0;
+    margin-right: auto;
+  }
+  .names {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
   }
   h1 {
     margin: 0;
     font-family: var(--font-display);
     font-size: 17px;
-    font-weight: 680;
+    font-weight: 700;
     letter-spacing: -0.02em;
-    white-space: nowrap;
+  }
+  .sub {
+    font-size: 12.5px;
+    color: var(--text-2);
   }
   .status {
     display: flex;
@@ -90,10 +91,6 @@
     font-size: 13px;
     color: var(--text-2);
     white-space: nowrap;
-  }
-  .s1 {
-    color: var(--text);
-    font-weight: 560;
   }
   .pulse {
     width: 8px;
@@ -113,25 +110,14 @@
       opacity: 1;
     }
   }
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    align-items: center;
-    gap: 6px;
-  }
   .add {
     color: var(--accent);
     background: var(--accent-soft);
     border-color: transparent;
   }
-  .add:hover:not(:disabled) {
-    background: var(--accent-soft);
-    filter: brightness(0.97);
-  }
-  @media (max-width: 760px) {
-    .top {
-      grid-template-columns: 1fr auto;
-      padding: 0 8px 0 14px;
+  @media (max-width: 560px) {
+    .inner {
+      padding: 0 14px;
     }
     .status {
       display: none;

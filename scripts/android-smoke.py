@@ -95,7 +95,7 @@ adb("shell", "content", "call", "--uri", "content://media", "--method", "scan_vo
 print("Installing and launching")
 adb("install", "-r", "-g", apk)
 adb("shell", "monkey", "-p", PKG, "-c", "android.intent.category.LAUNCHER", "1")
-btn = find(r"Choose Videos", timeout=90, fail=r"can.t start")
+btn = find(r"^\s*Choose videos\s*$", timeout=90, fail=r"can.t start")
 shot("01-launched")
 
 print("Picking the sample through the document picker")
@@ -114,8 +114,8 @@ except SystemExit:
 tap(item)
 
 print("Waiting for the file to be read and estimated")
-convert = find(r"Convert 1 File", timeout=60)
-find(r"≈", timeout=60)
+convert = find(r"^\s*Convert 1 video\s*$", timeout=60)
+find(r"about \d", timeout=60)
 shot("03-ready")
 
 print("Converting")

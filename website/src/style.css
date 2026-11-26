@@ -434,7 +434,7 @@ h2 .soft {
   overflow: hidden;
   box-shadow: var(--shadow);
   background: var(--card);
-  aspect-ratio: 1600 / 1025;
+  aspect-ratio: 1600 / 1105;
 }
 
 .window img {

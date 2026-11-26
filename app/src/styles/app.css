@@ -514,3 +514,9 @@ button {
     margin-top: -11.5px;
   }
 }
+
+/* Android draws the app edge to edge: keep clear of the status and gesture bars. */
+:root.mobile-app {
+  --status-top: 28px;
+  --nav-bottom: 16px;
+}

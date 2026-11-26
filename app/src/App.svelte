@@ -7,14 +7,12 @@
   import FileList from "./components/FileList.svelte";
   import Header from "./components/Header.svelte";
   import Icon from "./components/Icon.svelte";
-  import PrefsDialog from "./components/PrefsDialog.svelte";
-  import SettingsPanel from "./components/SettingsPanel.svelte";
   import Toasts from "./components/Toasts.svelte";
 
-  let prefsOpen = $state(false);
-
   onMount(() => {
-    app.init();
+    app.init().then(() => {
+      document.documentElement.classList.toggle("mobile-app", app.isMobile);
+    });
   });
 
   function keys(e: KeyboardEvent) {
@@ -25,44 +23,36 @@
     } else if (mod && e.key === "Enter") {
       e.preventDefault();
       app.convert();
-    } else if (mod && e.key === ",") {
-      e.preventDefault();
-      prefsOpen = true;
     }
   }
 </script>
 
 <svelte:window onkeydown={keys} />
 
-<a class="skip" href="#settings">Skip to conversion settings</a>
-
-<div class="shell" class:mobile={app.isMobile}>
-  <Header onprefs={() => (prefsOpen = true)} />
+<div class="shell">
+  <Header />
 
   {#if app.fatal}
-    <main class="fatal" role="alert">
+    <main class="center" role="alert">
       <Icon name="warning" size={36} />
       <h2>Pocket Reel can’t start</h2>
       <p>{app.fatal}</p>
     </main>
   {:else if !app.ready}
-    <main class="loading" aria-busy="true">
+    <main class="center" aria-busy="true">
       <span class="spin" aria-label="Loading"></span>
     </main>
   {:else}
-    <main class="layout">
-      <div class="left">
+    <main class="content">
+      <div class="column">
         {#if app.items.length === 0}
           <DropZone />
         {:else}
           <FileList />
         {/if}
       </div>
-      <aside class="right" aria-label="Settings">
-        <div class="scroll"><SettingsPanel /></div>
-        <ConvertBar />
-      </aside>
     </main>
+    <ConvertBar />
   {/if}
 </div>
 
@@ -76,58 +66,29 @@
 {/if}
 
 <Toasts />
-<PrefsDialog open={prefsOpen} onclose={() => (prefsOpen = false)} />
 
 <div class="visually-hidden" role="status" aria-live="polite" aria-atomic="true">{app.announcement}</div>
 
 <style>
-  .skip {
-    position: fixed;
-    left: 12px;
-    top: -60px;
-    z-index: 100;
-    padding: 10px 14px;
-    border-radius: var(--r-sm);
-    background: var(--accent);
-    color: var(--accent-text);
-    font-weight: 600;
-    text-decoration: none;
-    transition: top var(--t-med) var(--spring);
-  }
-  .skip:focus {
-    top: 12px;
-  }
   .shell {
     height: 100%;
     display: flex;
     flex-direction: column;
   }
-  .layout {
-    flex: 1;
-    min-height: 0;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 400px;
-  }
-  .left {
-    min-height: 0;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-  }
-  .right {
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg);
-    border-left: 1px solid var(--separator);
-  }
-  .scroll {
+  .content {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
   }
-  .loading,
-  .fatal {
+  .column {
+    max-width: 760px;
+    min-height: 100%;
+    margin: 0 auto;
+    padding: 0 20px;
+    display: flex;
+    flex-direction: column;
+  }
+  .center {
     flex: 1;
     display: grid;
     place-content: center;
@@ -136,11 +97,11 @@
     padding: 24px;
     color: var(--text-2);
   }
-  .fatal h2 {
+  .center h2 {
     color: var(--text);
     margin: 14px 0 6px;
   }
-  .fatal p {
+  .center p {
     max-width: 420px;
     margin: 0;
   }
@@ -187,37 +148,9 @@
       transform: scale(1.025);
     }
   }
-  @media (max-width: 860px) {
-    .layout {
-      grid-template-columns: minmax(0, 1fr) 360px;
-    }
-  }
-  @media (max-width: 760px) {
-    .layout {
-      display: flex;
-      flex-direction: column;
-      overflow-y: auto;
-    }
-    .left {
-      overflow: visible;
-      flex: none;
-      min-height: auto;
-    }
-    .left :global(.empty) {
-      min-height: 360px;
-    }
-    .right {
-      flex: none;
-      border-left: 0;
-      min-height: auto;
-    }
-    .scroll {
-      overflow: visible;
-    }
-    .right :global(.bar) {
-      position: sticky;
-      bottom: 0;
-      z-index: 4;
+  @media (max-width: 560px) {
+    .column {
+      padding: 0 14px;
     }
   }
 </style>
