@@ -10,6 +10,7 @@ import type {
   MediaInfo,
   Plan,
   Preset,
+  RemoteInfo,
   Settings,
 } from "./types";
 
@@ -53,6 +54,9 @@ export interface Item {
   media: MediaInfo | null;
   thumb: string | null;
   error: string | null;
+  /** Set for videos added from a link; they are downloaded when converted. */
+  link: RemoteInfo | null;
+  isLink: boolean;
   trimStart: number | null;
   trimEnd: number | null;
   plan: Plan | null;
@@ -115,7 +119,11 @@ export class AppState {
   totalEstimate = $derived(
     this.pending.reduce((sum, i) => sum + (i.estimate?.bytes ?? 0), 0),
   );
-  estimatesPending = $derived(this.pending.some((i) => i.estimating || (!i.estimate && !i.planError)));
+  /** Links have no size until downloaded, so only show a total for files. */
+  estimatesPending = $derived(
+    this.pending.some((i) => i.isLink || i.estimating || (!i.estimate && !i.planError)),
+  );
+  canDownload = $derived(!!this.info?.downloads);
 
   async init() {
     this.applyPrefs();
@@ -136,6 +144,7 @@ export class AppState {
       for (const j of existing) this.jobs[j.id] = j;
       this.api.setConcurrency(this.prefs.concurrency);
       this.ready = true;
+      if (info.downloads) this.watchShares();
     } catch (e) {
       this.fatal = e instanceof Error ? e.message : String(e);
     }
@@ -213,6 +222,8 @@ export class AppState {
       media: null,
       thumb: null,
       error: null,
+      link: null,
+      isLink: false,
       trimStart: null,
       trimEnd: null,
       plan: null,
@@ -227,6 +238,84 @@ export class AppState {
     await Promise.all(added.map((it) => this.loadItem(it.key)));
     this.scheduleEstimates(0);
     this.schedulePreview(0);
+  }
+
+  /** Add a video from a link (YouTube and any other site yt-dlp supports). */
+  /** Add a pasted or shared link. `start` converts it as soon as its details load. */
+  async addLink(text: string, start = false) {
+    const api = this.api;
+    const url = text.match(/https?:\/\/\S+/)?.[0];
+    if (!api || !url) {
+      this.toast("error", "That doesn't look like a video link.");
+      return false;
+    }
+    if (this.items.some((i) => i.path === url)) {
+      this.announce("That link is already in the list.");
+      return false;
+    }
+    const key = `i${++keySeq}`;
+    this.items = [
+      ...this.items,
+      {
+        key,
+        path: url,
+        name: url.replace(/^https?:\/\/(www\.)?/, ""),
+        status: "probing",
+        media: null,
+        thumb: null,
+        error: null,
+        link: null,
+        isLink: true,
+        trimStart: null,
+        trimEnd: null,
+        plan: null,
+        planError: null,
+        estimate: null,
+        estimating: false,
+        jobId: null,
+      },
+    ];
+    this.announce("Getting the video's details.");
+    try {
+      const info = await api.linkInfo(url);
+      const it = this.item(key);
+      if (it) {
+        it.link = info;
+        it.name = info.title;
+        it.thumb = info.thumbnail;
+        it.status = "ready";
+        this.announce(`Added ${info.title}.`);
+        if (start) await this.convert([it]);
+      }
+    } catch (e) {
+      const it = this.item(key);
+      if (it) {
+        it.status = "error";
+        it.error = e instanceof Error ? e.message : String(e);
+      }
+    }
+    return true;
+  }
+
+  /** Links shared from other apps (Android's Share menu). */
+  private watchShares() {
+    const check = async () => {
+      try {
+        const url = await this.api?.takeShared();
+        if (url) await this.addLink(url, true);
+      } catch {
+        /* nothing shared */
+      }
+    };
+    check();
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") check();
+    });
+    window.addEventListener("focus", check);
+    // Sharing to the app while it is already open doesn't always refocus it.
+    setInterval(() => {
+      if (document.visibilityState === "visible") check();
+    }, 2000);
   }
 
   private item(key: string): Item | undefined {
@@ -353,7 +442,7 @@ export class AppState {
   scheduleEstimates(delay = 220, keys?: string[]) {
     if (this.estimateTimer) clearTimeout(this.estimateTimer);
     for (const it of this.items) {
-      if (!keys || keys.includes(it.key)) it.estimating = it.status === "ready";
+      if (!keys || keys.includes(it.key)) it.estimating = it.status === "ready" && !it.isLink;
     }
     this.estimateTimer = setTimeout(() => this.runEstimates(keys), delay);
   }
@@ -362,7 +451,7 @@ export class AppState {
     const api = this.api;
     if (!api) return;
     const gen = ++this.estimateGen;
-    const targets = this.items.filter((i) => i.status === "ready" && (!keys || keys.includes(i.key)));
+    const targets = this.items.filter((i) => i.status === "ready" && !i.isLink && (!keys || keys.includes(i.key)));
     const queue = [...targets];
     const worker = async () => {
       while (queue.length) {
@@ -452,11 +541,18 @@ export class AppState {
     let queued = 0;
     for (const it of items) {
       try {
-        const snap = await api.enqueue({
-          input: it.path,
-          settings: this.settingsFor(it),
-          outputDir: this.prefs.outputDir,
-        });
+        const snap = await api.enqueue(
+          it.isLink
+            ? {
+                input: it.path,
+                url: it.path,
+                title: it.link?.title ?? it.name,
+                duration: it.link?.duration ?? null,
+                settings: this.settingsFor(it),
+                outputDir: this.prefs.outputDir,
+              }
+            : { input: it.path, settings: this.settingsFor(it), outputDir: this.prefs.outputDir },
+        );
         this.jobs[snap.id] = snap;
         const cur = this.item(it.key);
         if (cur) cur.jobId = snap.id;

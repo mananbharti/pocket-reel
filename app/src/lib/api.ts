@@ -11,6 +11,7 @@ import type {
   MediaInfo,
   Plan,
   Preset,
+  RemoteInfo,
   Settings,
 } from "./types";
 
@@ -39,6 +40,9 @@ export interface Api {
   retry(id: number): Promise<JobSnapshot>;
   jobs(): Promise<JobSnapshot[]>;
   setConcurrency(n: number): Promise<void>;
+  linkInfo(url: string): Promise<RemoteInfo>;
+  /** A link shared to the app from another app (Android), if any. */
+  takeShared(): Promise<string | null>;
   onEvent(cb: (e: EngineEvent) => void): () => void;
   pickFiles(): Promise<string[]>;
   pickFolder(): Promise<string | null>;
@@ -97,6 +101,8 @@ async function tauriApi(): Promise<Api> {
     retry: (id) => call("retry", { id }),
     jobs: () => call("jobs"),
     setConcurrency: (n) => call("set_concurrency", { n }),
+    linkInfo: (url) => call("link_info", { url }),
+    takeShared: () => call<string | null>("take_shared_url"),
     onEvent(cb) {
       let un: (() => void) | null = null;
       let disposed = false;
@@ -190,8 +196,8 @@ function httpApi(): Api {
   return {
     supportsFolders: false,
     async info() {
-      const i = await get<{ ffmpeg: string; defaultOutputDir: string }>("/api/info");
-      return { platform: "web", ffmpeg: i.ffmpeg, defaultOutputDir: i.defaultOutputDir, version: "1.0.0" };
+      const i = await get<{ ffmpeg: string; defaultOutputDir: string; downloads: boolean }>("/api/info");
+      return { platform: "web", ffmpeg: i.ffmpeg, defaultOutputDir: i.defaultOutputDir, version: "1.0.0", downloads: i.downloads };
     },
     presets: () => get("/api/presets"),
     probe: (path) => post("/api/probe", { path }),
@@ -208,6 +214,8 @@ function httpApi(): Api {
     retry: (id) => post("/api/retry", { id }),
     jobs: () => get("/api/jobs"),
     setConcurrency: async () => {},
+    linkInfo: (url) => post("/api/link-info", { url }),
+    takeShared: async () => null,
     onEvent(cb) {
       const es = new EventSource("/api/events");
       es.onmessage = (m) => cb(JSON.parse(m.data));

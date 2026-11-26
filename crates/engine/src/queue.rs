@@ -10,6 +10,7 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
 use crate::classic;
+use crate::download::{safe_file_stem, Downloader, RemoteInfo};
 use crate::error::{Error, Result};
 use crate::plan::{self, ffmpeg_args, output_path, partial_path, Estimate, Plan, Settings};
 use crate::probe::{self, MediaInfo};
@@ -28,6 +29,15 @@ pub struct JobRequest {
     pub output_dir: Option<String>,
     #[serde(default)]
     pub overwrite: bool,
+    /// Set when `input` is a link to download first (YouTube and others).
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Title shown while downloading (from the link's details).
+    #[serde(default)]
+    pub title: Option<String>,
+    /// Length in seconds, if known before downloading.
+    #[serde(default)]
+    pub duration: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -53,9 +63,12 @@ pub struct JobSnapshot {
     pub output: String,
     pub output_bytes: Option<u64>,
     pub error: Option<String>,
-    pub plan: Plan,
+    /// Known after probing; for links, after the download finished.
+    pub plan: Option<Plan>,
     pub estimate: Option<Estimate>,
     pub duration: f64,
+    /// The link this job downloads, if any.
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,8 +98,16 @@ struct State {
     shutdown: bool,
 }
 
+/// Where link downloads happen and where their results go by default.
+struct DownloadSetup {
+    downloader: Arc<dyn Downloader>,
+    work_dir: PathBuf,
+    output_dir: PathBuf,
+}
+
 struct Inner {
     tools: Tools,
+    download: Mutex<Option<DownloadSetup>>,
     state: Mutex<State>,
     wake: Condvar,
     sink: Sink,
@@ -102,6 +123,7 @@ impl Engine {
     pub fn new(tools: Tools, sink: impl Fn(Event) + Send + Sync + 'static) -> Engine {
         let inner = Arc::new(Inner {
             tools,
+            download: Mutex::new(None),
             state: Mutex::new(State { jobs: Vec::new(), next_id: 1, running: 0, concurrency: 1, shutdown: false }),
             wake: Condvar::new(),
             sink: Box::new(sink),
@@ -117,6 +139,28 @@ impl Engine {
 
     pub fn tools(&self) -> &Tools {
         &self.inner.tools
+    }
+
+    /// Enable downloading from links. Downloads are kept in `work_dir` until
+    /// converted; results go to `output_dir` unless a job names another folder.
+    pub fn set_downloader(&self, downloader: Arc<dyn Downloader>, work_dir: PathBuf, output_dir: PathBuf) {
+        *self.inner.download.lock().unwrap() = Some(DownloadSetup { downloader, work_dir, output_dir });
+    }
+
+    pub fn can_download(&self) -> bool {
+        self.inner.download.lock().unwrap().is_some()
+    }
+
+    fn downloader(&self) -> Result<(Arc<dyn Downloader>, PathBuf, PathBuf)> {
+        let d = self.inner.download.lock().unwrap();
+        let d = d.as_ref().ok_or_else(|| Error::Invalid("Downloading from links isn't available in this build.".into()))?;
+        Ok((d.downloader.clone(), d.work_dir.clone(), d.output_dir.clone()))
+    }
+
+    /// Details (title, length, thumbnail) for a link.
+    pub fn link_info(&self, url: &str) -> Result<RemoteInfo> {
+        let (d, _, _) = self.downloader()?;
+        d.info(url)
     }
 
     pub fn probe(&self, path: &Path) -> Result<MediaInfo> {
@@ -165,6 +209,9 @@ impl Engine {
     /// Validate and queue a conversion. Errors (unreadable file, invalid
     /// settings, missing encoder) are returned immediately.
     pub fn enqueue(&self, request: JobRequest) -> Result<JobSnapshot> {
+        if request.url.is_some() {
+            return self.enqueue_link(request);
+        }
         let input = PathBuf::from(&request.input);
         let media = self.probe(&input)?;
         let plan = plan::resolve(&self.inner.tools, &request.settings, &media)?;
@@ -185,8 +232,43 @@ impl Engine {
             output_bytes: None,
             error: None,
             duration: plan.duration,
-            plan,
+            plan: Some(plan),
             estimate: None,
+            url: None,
+        };
+        st.jobs.push(Entry { snap: snap.clone(), request, cancel: CancelToken::new() });
+        drop(st);
+        self.emit(Event::Job { job: snap.clone() });
+        self.inner.wake.notify_all();
+        Ok(snap)
+    }
+
+    fn enqueue_link(&self, request: JobRequest) -> Result<JobSnapshot> {
+        let (_, _, default_out) = self.downloader()?;
+        let preset = crate::presets::find(&request.settings.preset)
+            .ok_or_else(|| Error::UnknownPreset(request.settings.preset.clone()))?;
+        let title = request.title.clone().unwrap_or_else(|| "Video".into());
+        let out_dir = request.output_dir.as_ref().map(PathBuf::from).unwrap_or(default_out);
+        let mut st = self.inner.state.lock().unwrap();
+        let fake_input = out_dir.join(format!("{}.download", safe_file_stem(&title)));
+        let output = Self::pick_output(&st, &fake_input, Some(&out_dir), &preset.extension, request.overwrite);
+        let id = st.next_id;
+        st.next_id += 1;
+        let snap = JobSnapshot {
+            id,
+            input: request.input.clone(),
+            file_name: title,
+            preset_id: preset.id.clone(),
+            preset_name: preset.name.clone(),
+            state: JobState::Queued,
+            progress: None,
+            output: output.to_string_lossy().to_string(),
+            output_bytes: None,
+            error: None,
+            plan: None,
+            estimate: None,
+            duration: request.duration.unwrap_or(0.0),
+            url: request.url.clone(),
         };
         st.jobs.push(Entry { snap: snap.clone(), request, cancel: CancelToken::new() });
         drop(st);
@@ -300,17 +382,63 @@ impl Engine {
         let id = snap.id;
         let started = Instant::now();
         let mut output = PathBuf::from(&snap.output);
-        if output.exists() && !request.overwrite {
-            let st = self.inner.state.lock().unwrap();
-            let out_dir = request.output_dir.as_ref().map(PathBuf::from);
-            output = Self::pick_output(&st, Path::new(&snap.input), out_dir.as_deref(), &snap.plan.extension, false);
-        }
         let me = self.clone();
         let mut on_progress = move |p: Progress| {
             me.update(id, |s| s.progress = Some(p));
             me.emit(Event::Progress { id, progress: p });
         };
-        let result = execute(&self.inner.tools, &snap.plan, Path::new(&snap.input), &output, request.overwrite, &cancel, &mut on_progress);
+
+        let mut work_dir: Option<PathBuf> = None;
+        let result = (|| -> Result<u64> {
+            // 1. Links: download first.
+            let (input, plan) = match &request.url {
+                Some(url) => {
+                    let (downloader, work, _) = self.downloader()?;
+                    let dir = work.join(format!("job-{id}-{}", std::process::id()));
+                    work_dir = Some(dir.clone());
+                    let t0 = Instant::now();
+                    let mut emit = |fraction: f64, eta: Option<f64>| {
+                        on_progress(Progress {
+                            fraction,
+                            downloading: true,
+                            media_seconds: 0.0,
+                            speed: 0.0,
+                            eta_seconds: eta,
+                            elapsed_seconds: t0.elapsed().as_secs_f64(),
+                            bytes: 0,
+                        });
+                    };
+                    emit(0.0, None);
+                    let file = downloader.download(url, &dir, &cancel, &mut emit)?;
+                    let media = probe::probe(&self.inner.tools, &file)?;
+                    let plan = plan::resolve(&self.inner.tools, &request.settings, &media)?;
+                    self.update(id, |s| {
+                        s.duration = plan.duration;
+                        s.plan = Some(plan.clone());
+                    });
+                    (file, plan)
+                }
+                None => (
+                    PathBuf::from(&snap.input),
+                    snap.plan.clone().ok_or_else(|| Error::Invalid("Nothing to convert.".into()))?,
+                ),
+            };
+            // 2. Convert.
+            if output.exists() && !request.overwrite {
+                let st = self.inner.state.lock().unwrap();
+                let out_dir = output.parent().map(Path::to_path_buf);
+                let named = match &request.url {
+                    Some(_) => output.with_extension("download"),
+                    None => PathBuf::from(&snap.input),
+                };
+                output = Self::pick_output(&st, &named, out_dir.as_deref(), &plan.extension, false);
+            }
+            execute(&self.inner.tools, &plan, &input, &output, request.overwrite, &cancel, &mut on_progress)
+        })();
+        if let Some(dir) = work_dir {
+            let _ = fs::remove_dir_all(dir);
+        }
+
         let elapsed = started.elapsed().as_secs_f64();
         let final_snap = self.update(id, |s| {
             s.output = output.to_string_lossy().to_string();
@@ -320,6 +448,7 @@ impl Engine {
                     s.output_bytes = Some(*bytes);
                     if let Some(p) = &mut s.progress {
                         p.fraction = 1.0;
+                        p.downloading = false;
                         p.eta_seconds = Some(0.0);
                         p.elapsed_seconds = elapsed;
                         p.bytes = *bytes;

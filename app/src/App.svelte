@@ -15,6 +15,17 @@
     });
   });
 
+  // Ctrl+V anywhere (outside a text field) adds a copied video link.
+  function paste(e: ClipboardEvent) {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("input, textarea, [contenteditable]")) return;
+    const text = e.clipboardData?.getData("text") ?? "";
+    if (app.canDownload && /https?:\/\//.test(text)) {
+      e.preventDefault();
+      app.addLink(text);
+    }
+  }
+
   function keys(e: KeyboardEvent) {
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key.toLowerCase() === "o") {
@@ -27,7 +38,7 @@
   }
 </script>
 
-<svelte:window onkeydown={keys} />
+<svelte:window onkeydown={keys} onpaste={paste} />
 
 <div class="shell">
   <Header />

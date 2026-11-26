@@ -9,6 +9,7 @@
 pub mod adpcm;
 pub mod avi;
 pub mod classic;
+pub mod download;
 pub mod error;
 pub mod jpeg;
 pub mod plan;
@@ -20,6 +21,7 @@ pub mod queue;
 pub mod run;
 pub mod tools;
 
+pub use download::{Downloader, RemoteInfo, YtDlp};
 pub use error::{Error, Result};
 pub use plan::{Estimate, Plan, Settings};
 pub use presets::{Fit, Preset};

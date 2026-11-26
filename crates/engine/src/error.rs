@@ -16,6 +16,8 @@ pub enum Error {
     EncoderMissing(String),
     #[error("Conversion failed: {0}")]
     Ffmpeg(String),
+    #[error("{0}")]
+    Download(String),
     #[error("Canceled")]
     Canceled,
     #[error(transparent)]

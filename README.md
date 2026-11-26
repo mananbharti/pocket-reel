@@ -5,7 +5,7 @@
 # Pocket Reel
 
 **Put any video on your MP3 player.**<br>
-Add videos, press Convert, copy them to the player. That's it.
+Add videos or paste a link, press Convert, copy them to the player. That's it.
 
 [![CI](https://github.com/mananbharti/pocket-reel/actions/workflows/ci.yml/badge.svg)](https://github.com/mananbharti/pocket-reel/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/mananbharti/pocket-reel?display_name=tag&sort=semver)](https://github.com/mananbharti/pocket-reel/releases/latest)
@@ -25,9 +25,11 @@ Add videos, press Convert, copy them to the player. That's it.
 
 ## How to use it
 
-1. **Add videos.** Click *Choose videos* or drop them on the window. Add as many as you like.
+1. **Add videos.** Click *Choose videos*, drop them on the window, or **paste a video link**. Add as many as you like.
 2. **Press Convert.** Every video is turned into the exact video format your MP3 player plays.
 3. **Copy them to your player.** Plug the player in and copy the `.avi` files onto it (usually into its `VIDEO` folder).
+
+**Links work too.** Paste a link from YouTube, Instagram, X, Facebook, Vimeo, TikTok, Reddit, Dailymotion and [1000+ other sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md), or a direct link to a video file. Pocket Reel downloads it and converts it in one go. On Android, tap *Share* in YouTube or your browser and pick **Pocket Reel**: the video is downloaded and converted on its own.
 
 **Tip:** set *Save to* to your player's drive, and the converted videos go straight onto the player.
 
@@ -41,7 +43,10 @@ Most players have a 160 × 120 screen, which is the default. If yours is differe
 | **Linux** (x86-64) | [`PocketReel-linux-x86_64.AppImage`](https://github.com/mananbharti/pocket-reel/releases/latest/download/PocketReel-linux-x86_64.AppImage) (a `.deb` is attached too) |
 | **Android 8+** | [`PocketReel-android.apk`](https://github.com/mananbharti/pocket-reel/releases/latest/download/PocketReel-android.apk). Converted videos are saved to *Movies › Pocket Reel*. |
 
-Everything is built in. Nothing to install, no account, no internet needed, and your videos never leave your device.
+Everything is built in. Nothing to install and no account. Your own videos never leave your device; the internet is only used when you add a link.
+
+> [!IMPORTANT]
+> Only download videos you have the right to keep, such as your own, ones with a free licence, or ones the site lets you download. Respect each site's terms.
 
 > [!NOTE]
 > The Windows installer is not code-signed yet, so SmartScreen may ask you to confirm ("More info", then "Run anyway").
@@ -95,7 +100,7 @@ cargo test -p pocketreel-engine          # unit, fidelity and end-to-end tests (
 cd app && npm ci && npx tauri dev        # run the app
 ```
 
-- `crates/engine`: the conversion engine in Rust, including the from-scratch JPEG, IMA ADPCM and AVI writers.
+- `crates/engine`: the conversion engine in Rust, including the from-scratch JPEG, IMA ADPCM and AVI writers, and link downloads through [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 - `crates/cli`: `pocketreel convert *.mp4 -o /media/PLAYER/VIDEO` for batch use from a terminal.
 - `app`: the Svelte UI and the Tauri shell for Windows, Linux and Android.
 - `.github/workflows/release.yml`: builds and tests all three platforms; Android builds are installed on an emulator, convert a real video through the app, and the result is checked.
@@ -104,6 +109,6 @@ The engine also knows more formats (MP4, MP3 and others) that the CLI can produc
 
 ## License and credits
 
-Free software under the [GNU GPL v3 or later](LICENSE). Bundles [FFmpeg](https://ffmpeg.org) (GPL build with [LAME](https://lame.sourceforge.io) and [x264](https://www.videolan.org/developers/x264.html)). Built with [Tauri](https://tauri.app) and [Svelte](https://svelte.dev).
+Free software under the [GNU GPL v3 or later](LICENSE). Bundles [FFmpeg](https://ffmpeg.org) (GPL build with [LAME](https://lame.sourceforge.io) and [x264](https://www.videolan.org/developers/x264.html)). Downloads links with [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Unlicense) and [QuickJS](https://github.com/quickjs-ng/quickjs) (MIT) on desktop, and with [youtubedl-android](https://github.com/JunkFood02/youtubedl-android), the library behind [YTDLnis](https://github.com/deniscerri/ytdlnis), on Android. Built with [Tauri](https://tauri.app) and [Svelte](https://svelte.dev).
 
 Not affiliated with Actions Semiconductor or Audiocular. Product names belong to their owners.

@@ -147,6 +147,8 @@ export interface Estimate {
 
 export interface Progress {
   fraction: number;
+  /** True while a link is being downloaded, before converting. */
+  downloading: boolean;
   mediaSeconds: number;
   speed: number;
   etaSeconds: number | null;
@@ -167,9 +169,10 @@ export interface JobSnapshot {
   output: string;
   outputBytes: number | null;
   error: string | null;
-  plan: Plan;
+  plan: Plan | null;
   estimate: Estimate | null;
   duration: number;
+  url: string | null;
 }
 
 export interface JobRequest {
@@ -177,6 +180,18 @@ export interface JobRequest {
   settings: Settings;
   outputDir?: string | null;
   overwrite?: boolean;
+  url?: string | null;
+  title?: string | null;
+  duration?: number | null;
+}
+
+export interface RemoteInfo {
+  url: string;
+  id: string;
+  title: string;
+  duration: number | null;
+  thumbnail: string | null;
+  uploader: string | null;
 }
 
 export interface Image {
@@ -200,4 +215,6 @@ export interface AppInfo {
   version: string;
   /** Present when FFmpeg could not be started. */
   engineError?: string | null;
+  /** Pasting and sharing video links works. */
+  downloads?: boolean;
 }

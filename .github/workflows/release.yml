@@ -30,8 +30,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
-      - name: Bundle FFmpeg
-        run: scripts/fetch-ffmpeg.sh linux64
+      - name: Bundle FFmpeg, yt-dlp and QuickJS
+        run: |
+          scripts/fetch-ffmpeg.sh linux64
+          scripts/fetch-downloader.sh linux64
       - name: Build
         working-directory: app
         run: |
@@ -40,8 +42,15 @@ jobs:
       - name: Smoke test the bundled app's engine
         run: |
           ./app/src-tauri/resources/ffmpeg/ffmpeg -v error -f lavfi -i testsrc2=size=320x240:duration=2 -f lavfi -i sine=d=2 -c:v libx264 -c:a aac s.mp4
-          POCKETREEL_FFMPEG=$PWD/app/src-tauri/resources/ffmpeg/ffmpeg POCKETREEL_FFPROBE=$PWD/app/src-tauri/resources/ffmpeg/ffprobe cargo run --release -p pocketreel-cli -- convert s.mp4 -p classic-avi -o out
-          dpkg-deb -c target/release/bundle/deb/*.deb | grep -E 'ffmpeg|ffprobe|pocket-reel'
+          export POCKETREEL_FFMPEG=$PWD/app/src-tauri/resources/ffmpeg/ffmpeg POCKETREEL_FFPROBE=$PWD/app/src-tauri/resources/ffmpeg/ffprobe
+          cargo run --release -p pocketreel-cli -- convert s.mp4 -p classic-avi -o out
+          # A link, downloaded with the bundled yt-dlp and then converted.
+          mkdir web && cp s.mp4 web/clip.mp4
+          (cd web && python3 -m http.server 8765 >/dev/null 2>&1 &)
+          sleep 2
+          cargo run --release -p pocketreel-cli -- convert http://127.0.0.1:8765/clip.mp4 -o out-link
+          ls -la out-link && test -s out-link/clip.avi
+          dpkg-deb -c target/release/bundle/deb/*.deb | grep -E 'ffmpeg|ffprobe|yt-dlp|qjs|pocket-reel'
       - uses: actions/upload-artifact@v4
         with:
           name: linux
@@ -58,9 +67,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
-      - name: Bundle FFmpeg
+      - name: Bundle FFmpeg, yt-dlp and QuickJS
         shell: bash
-        run: scripts/fetch-ffmpeg.sh win64
+        run: |
+          scripts/fetch-ffmpeg.sh win64
+          scripts/fetch-downloader.sh win64
       - name: Build
         working-directory: app
         run: |
@@ -71,8 +82,14 @@ jobs:
         run: |
           F=app/src-tauri/resources/ffmpeg
           $F/ffmpeg.exe -v error -f lavfi -i testsrc2=size=320x240:duration=2 -f lavfi -i sine=d=2 -c:v libx264 -c:a aac s.mp4
-          POCKETREEL_FFMPEG=$F/ffmpeg.exe POCKETREEL_FFPROBE=$F/ffprobe.exe cargo run --release -p pocketreel-cli -- convert s.mp4 -p classic-avi -o out
+          export POCKETREEL_FFMPEG=$PWD/$F/ffmpeg.exe POCKETREEL_FFPROBE=$PWD/$F/ffprobe.exe
+          cargo run --release -p pocketreel-cli -- convert s.mp4 -p classic-avi -o out
           ls -la out
+          mkdir web && cp s.mp4 web/clip.mp4
+          (cd web && python -m http.server 8765 >/dev/null 2>&1 &)
+          sleep 3
+          cargo run --release -p pocketreel-cli -- convert http://127.0.0.1:8765/clip.mp4 -o out-link
+          ls -la out-link && test -s out-link/clip.avi
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -201,7 +218,7 @@ jobs:
           name: Pocket Reel ${{ env.TAG }}
           files: release/*
           body: |
-            Put any video on your MP3 player: add videos, press Convert, copy them to the player.
+            Put any video on your MP3 player: add videos or paste a link (YouTube and 1000+ other sites), press Convert, copy them to the player. On Android you can also share a video from YouTube or your browser straight to Pocket Reel.
 
             | Platform | Download |
             | --- | --- |

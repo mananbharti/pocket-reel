@@ -28,6 +28,8 @@ impl CancelToken {
 pub struct Progress {
     /// 0.0 ..= 1.0
     pub fraction: f64,
+    /// True while a link is being downloaded (before converting).
+    pub downloading: bool,
     /// Seconds of output media produced so far.
     pub media_seconds: f64,
     /// Processing speed relative to real time (2.0 = twice as fast as playback).
@@ -96,7 +98,7 @@ impl Tracker {
         } else {
             None
         };
-        Progress { fraction, media_seconds: media_done, speed: rate.max(0.0), eta_seconds: eta, elapsed_seconds: elapsed, bytes }
+        Progress { fraction, downloading: false, media_seconds: media_done, speed: rate.max(0.0), eta_seconds: eta, elapsed_seconds: elapsed, bytes }
     }
 
     /// Final 100% update.

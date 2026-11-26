@@ -8,8 +8,9 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use pocketreel_engine::download::{extract_url, Downloader};
 use pocketreel_engine::{
-    format_bytes, plan, presets, preview, Engine, Event, Fit, JobRequest, JobState, Settings, Tools,
+    format_bytes, plan, presets, preview, Engine, Event, Fit, JobRequest, JobState, Settings, Tools, YtDlp,
 };
 
 #[derive(Parser)]
@@ -121,7 +122,9 @@ enum Cmd {
         #[arg(short, long)]
         output: PathBuf,
     },
-    /// Convert one or more files.
+    /// Show a link's title and length (YouTube and other sites).
+    Link { url: String },
+    /// Convert files and/or links (links are downloaded first).
     Convert {
         #[arg(required = true)]
         files: Vec<PathBuf>,
@@ -228,20 +231,50 @@ fn run() -> Result<(), String> {
             std::fs::write(&output, bytes).map_err(|e| e.to_string())?;
             println!("{} x {} -> {}", img.width, img.height, output.display());
         }
+        Cmd::Link { url } => {
+            let t = tools()?;
+            let y = YtDlp::locate(&[], &t.ffmpeg).ok_or("yt-dlp was not found")?;
+            let i = y.info(&url).map_err(|e| e.to_string())?;
+            println!("{}\n  {}  {}", i.title, fmt_time(i.duration.unwrap_or(0.0)), i.uploader.unwrap_or_default());
+        }
         Cmd::Convert { files, opts, out, overwrite, jobs } => {
             let t = tools()?;
+            let ytdlp = YtDlp::locate(&[], &t.ffmpeg);
             let (tx, rx) = mpsc::channel();
             let engine = Engine::new(t, move |e| {
                 let _ = tx.send(e);
             });
             engine.set_concurrency(jobs);
+            if let Some(y) = &ytdlp {
+                let out_dir = out.clone().unwrap_or_else(|| PathBuf::from("."));
+                engine.set_downloader(
+                    std::sync::Arc::new(y.clone()),
+                    std::env::temp_dir().join("pocketreel-downloads"),
+                    out_dir,
+                );
+            }
             let mut ids = Vec::new();
             for f in &files {
+                let text = f.to_string_lossy().to_string();
+                let link = extract_url(&text);
+                let (title, duration) = match (&link, &ytdlp) {
+                    (Some(u), Some(y)) => match y.info(u) {
+                        Ok(i) => (Some(i.title), i.duration),
+                        Err(e) => {
+                            eprintln!("skip {u}: {e}");
+                            continue;
+                        }
+                    },
+                    _ => (None, None),
+                };
                 let req = JobRequest {
-                    input: f.to_string_lossy().to_string(),
+                    input: link.clone().unwrap_or(text),
                     settings: opts.settings(),
                     output_dir: out.as_ref().map(|o| o.to_string_lossy().to_string()),
                     overwrite,
+                    url: link,
+                    title,
+                    duration,
                 };
                 match engine.enqueue(req) {
                     Ok(s) => ids.push(s.id),
@@ -253,6 +286,10 @@ fn run() -> Result<(), String> {
             while remaining > 0 {
                 let Ok(ev) = rx.recv() else { break };
                 match ev {
+                    Event::Progress { id, progress } if progress.downloading => {
+                        eprint!("\r  job {id}: downloading {:5.1}%   ", progress.fraction * 100.0);
+                        let _ = std::io::stderr().flush();
+                    }
                     Event::Progress { id, progress } => {
                         let eta = progress.eta_seconds.map(fmt_time).unwrap_or_else(|| "--:--".into());
                         eprint!(

@@ -10,12 +10,26 @@
   const busy = $derived(job?.state === "running" || job?.state === "queued");
   const pct = $derived(Math.floor((job?.progress?.fraction ?? 0) * 100));
 
+  const site = $derived.by(() => {
+    try {
+      return new URL(item.path).hostname.replace(/^(www|m)\./, "");
+    } catch {
+      return "the web";
+    }
+  });
+  const length = $derived(item.isLink ? item.link?.duration : item.media?.duration);
+  const downloading = $derived(job?.state === "running" && !!job.progress?.downloading);
+
   const status = $derived.by(() => {
-    if (item.status === "probing") return "Reading…";
+    if (item.status === "probing") return item.isLink ? "Getting video details…" : "Reading…";
     if (item.status === "error") return item.error ?? "Can't read this file";
-    if (!job) return item.estimate && !item.estimating ? `${clock(item.media?.duration)} · about ${bytes(item.estimate.bytes)}` : clock(item.media?.duration);
+    if (!job) {
+      if (item.isLink) return `From ${site}${length ? ` · ${clock(length)}` : ""}`;
+      return item.estimate && !item.estimating ? `${clock(length)} · about ${bytes(item.estimate.bytes)}` : clock(length);
+    }
     if (job.state === "queued") return "Waiting…";
-    if (job.state === "running") return `${pct}% · ${remaining(job.progress?.etaSeconds)}`;
+    if (downloading) return `Downloading ${pct}% · ${remaining(job.progress?.etaSeconds)}`;
+    if (job.state === "running") return `Converting ${pct}% · ${remaining(job.progress?.etaSeconds)}`;
     if (job.state === "done") return `Ready for your player · ${bytes(job.outputBytes)}`;
     if (job.state === "canceled") return "Stopped";
     return job.error ?? "Couldn't convert";
@@ -23,9 +37,11 @@
 
   const spoken = $derived.by(() => {
     const p = [item.name];
-    if (item.media) p.push(durationWords(item.media.duration));
+    if (length) p.push(durationWords(length));
+    if (item.isLink) p.push(`from ${site}`);
     if (job?.state === "done") p.push(`ready, ${bytesSpoken(job.outputBytes)}`);
     else if (job?.state === "failed") p.push(`failed: ${job.error}`);
+    else if (downloading) p.push(`downloading, ${pct} percent`);
     else if (job?.state === "running") p.push(`converting, ${pct} percent`);
     else if (item.estimate) p.push(`about ${bytesSpoken(item.estimate.bytes)}`);
     return p.join(", ");
@@ -43,7 +59,7 @@
     {:else if item.status === "probing"}
       <span class="shimmer"></span>
     {:else}
-      <Icon name="film" size={22} stroke={1.6} />
+      <Icon name={item.isLink ? "globe" : "film"} size={22} stroke={1.6} />
     {/if}
     {#if job?.state === "done"}
       <span class="tick"><Icon name="check" size={16} stroke={3} /></span>
@@ -51,13 +67,13 @@
   </span>
 
   <span class="info">
-    <span class="name">{item.name}</span>
+    <span class="name" title={item.isLink ? item.path : undefined}>{item.name}</span>
     <span class="status num">{status}</span>
     {#if busy}
       <ProgressBar
         value={job?.state === "queued" ? 0 : (job?.progress?.fraction ?? 0)}
         label="Converting {item.name}"
-        valueText={job?.state === "queued" ? "Waiting" : `${pct}%, ${remaining(job?.progress?.etaSeconds)}`}
+        valueText={job?.state === "queued" ? "Waiting" : `${downloading ? "Downloading" : "Converting"} ${pct}%, ${remaining(job?.progress?.etaSeconds)}`}
       />
     {/if}
   </span>

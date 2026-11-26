@@ -454,7 +454,10 @@ pub fn estimate_by_formula(plan: &Plan) -> Option<Estimate> {
             AudioCodec::Pcm => {
                 // 44-byte header plus a small metadata chunk (title, encoder).
                 let data = audio_bytes(au)? + 44.0;
-                Some(Estimate::range(data + 64.0, data, data + 4096.0, EstimateMethod::Exact))
+                // The container's length can run a codec frame (up to 2048 samples)
+                // past the audio itself.
+                let frame = 2048.0 * au.channels as f64 * 2.0;
+                Some(Estimate::range(data + 64.0, data - frame, data + 4096.0, EstimateMethod::Exact))
             }
             AudioCodec::Flac => {
                 let wav = d * au.sample_rate as f64 * au.channels as f64 * 2.0;

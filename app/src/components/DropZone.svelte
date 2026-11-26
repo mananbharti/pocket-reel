@@ -1,18 +1,28 @@
 <script lang="ts">
   import { app } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
+  import LinkBox from "./LinkBox.svelte";
 </script>
 
 <section class="empty" aria-labelledby="empty-title">
   <div class="art" aria-hidden="true"><Icon name="film" size={40} stroke={1.5} /></div>
   <h2 id="empty-title">Add your videos</h2>
-  <p>Pick any videos. Pocket Reel turns them into files your MP3 player can play.</p>
+  <p>
+    Pick videos{app.canDownload ? " or paste a link from YouTube or any other site" : ""}. Pocket Reel turns them into
+    files your MP3 player can play.
+  </p>
   <button type="button" class="btn primary large" onclick={() => app.pickFiles()}>
     <Icon name="plus" size={20} />
     Choose videos
   </button>
   {#if !app.isMobile}
     <p class="hint">or drop them here</p>
+  {/if}
+  {#if app.canDownload}
+    <div class="linkwrap"><LinkBox /></div>
+    {#if app.isMobile}
+      <p class="hint">Tip: in YouTube or any app, tap Share and choose Pocket Reel.</p>
+    {/if}
   {/if}
   <ol class="steps">
     <li><span class="n">1</span>Add videos</li>
@@ -69,6 +79,10 @@
     margin: 12px 0 0;
     font-size: 13.5px;
     color: var(--text-3);
+  }
+  .linkwrap {
+    width: min(460px, 100%);
+    margin-top: 22px;
   }
   .steps {
     list-style: none;

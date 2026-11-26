@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64::Engine as _;
-use pocketreel_engine::{plan, presets, preview, probe, Engine, JobRequest, Settings, Tools};
+use pocketreel_engine::{plan, presets, preview, probe, Engine, JobRequest, Settings, Tools, YtDlp};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -123,6 +123,11 @@ struct PlanArg {
 }
 
 #[derive(Deserialize)]
+struct UrlArg {
+    url: String,
+}
+
+#[derive(Deserialize)]
 struct IdArg {
     id: u64,
 }
@@ -186,6 +191,7 @@ fn api(ctx: &Ctx, req: &mut Request) -> (u16, Value) {
             "platform": "web",
             "ffmpeg": t.version,
             "defaultOutputDir": ctx.uploads.join("converted").to_string_lossy(),
+            "downloads": ctx.engine.can_download(),
         })),
         ("GET", "/api/presets") => ok(presets::catalog_for(t)),
         ("GET", "/api/jobs") => ok(ctx.engine.jobs()),
@@ -240,6 +246,13 @@ fn api(ctx: &Ctx, req: &mut Request) -> (u16, Value) {
                     Err(e) => err(e),
                 }
             }
+            Err(e) => err(e),
+        },
+        ("POST", "/api/link-info") => match body::<UrlArg>(req) {
+            Ok(a) => match ctx.engine.link_info(a.url.trim()) {
+                Ok(i) => ok(i),
+                Err(e) => err(e),
+            },
             Err(e) => err(e),
         },
         ("POST", "/api/enqueue") => match body::<JobRequest>(req) {
@@ -353,10 +366,14 @@ pub fn serve(tools: Tools, port: u16, ui: Option<PathBuf>, uploads: Option<PathB
     std::fs::create_dir_all(uploads.join("converted")).map_err(|e| e.to_string())?;
     let subs: Subscribers = Arc::new(Mutex::new(Vec::new()));
     let sink_subs = subs.clone();
+    let ytdlp = YtDlp::locate(&[], &tools.ffmpeg);
     let engine = Engine::new(tools, move |ev| {
         let msg = serde_json::to_string(&ev).unwrap();
         sink_subs.lock().unwrap().retain(|s| s.send(msg.clone()).is_ok());
     });
+    if let Some(y) = ytdlp {
+        engine.set_downloader(Arc::new(y), uploads.join("downloads"), uploads.join("converted"));
+    }
     let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| e.to_string())?;
     eprintln!("Pocket Reel bridge on http://127.0.0.1:{port}  (uploads: {})", uploads.display());
     let ctx = Arc::new(Ctx { engine, subs, ui, uploads });

@@ -4,9 +4,12 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use std::sync::Arc;
+
+use pocketreel_engine::download::extract_url;
 use pocketreel_engine::{
-    plan, presets, preview, probe, Engine, Estimate, Event, JobRequest, JobSnapshot, MediaInfo, Plan, Preset, Settings,
-    Tools,
+    plan, presets, preview, probe, Engine, Estimate, Event, JobRequest, JobSnapshot, MediaInfo, Plan, Preset,
+    RemoteInfo, Settings, Tools, YtDlp,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -53,6 +56,8 @@ struct AppInfo {
     default_output_dir: Option<String>,
     version: String,
     engine_error: Option<String>,
+    /// Pasting or sharing links works.
+    downloads: bool,
 }
 
 fn platform() -> &'static str {
@@ -107,6 +112,7 @@ async fn app_info(app: AppHandle) -> Result<AppInfo, String> {
         ffmpeg: engine.as_ref().map(|e| e.tools().version.clone()).unwrap_or_default(),
         default_output_dir: android_output_dir(false).map(|p| p.to_string_lossy().to_string()),
         version: app.package_info().version.to_string(),
+        downloads: engine.as_ref().map(|e| e.can_download()).unwrap_or(false),
         engine_error: engine.err(),
     })
 }
@@ -249,6 +255,32 @@ fn set_concurrency(state: State<AppState>, n: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// Title, length and thumbnail of a link (YouTube and other sites).
+#[tauri::command]
+async fn link_info(app: AppHandle, url: String) -> Result<RemoteInfo, String> {
+    let e = ready_engine(&app).await?;
+    let url = extract_url(&url).ok_or("That doesn't look like a link.")?;
+    blocking(move || e.link_info(&url).map_err(|e| e.to_string())).await
+}
+
+/// A link shared to the app from another app (Android), taken once.
+#[tauri::command]
+async fn take_shared_url(app: AppHandle) -> Result<Option<String>, String> {
+    #[cfg(target_os = "android")]
+    {
+        if let Some(h) = app.try_state::<mobile::YtdlHandle>() {
+            let h = h.0.clone();
+            return blocking(move || {
+                let r: mobile::SharedResp = h.run_mobile_plugin("takeShared", ()).map_err(|e| e.to_string())?;
+                Ok(r.url)
+            })
+            .await;
+        }
+    }
+    let _ = app;
+    Ok(None)
+}
+
 /// Android: copy picked content:// documents into app storage so FFmpeg can read them.
 #[tauri::command]
 async fn import_uris(app: AppHandle, uris: Vec<String>) -> Result<Vec<String>, String> {
@@ -284,9 +316,201 @@ async fn import_uris(app: AppHandle, uris: Vec<String>) -> Result<Vec<String>, S
     Ok(out)
 }
 
+/// Enable "paste a link" and sharing: yt-dlp on desktop, youtubedl-android on Android.
+fn setup_downloads(app: &AppHandle, engine: &Engine, ffmpeg: &Path) {
+    let work = app.path().app_cache_dir().unwrap_or_else(|_| std::env::temp_dir()).join("downloads");
+    let _ = std::fs::remove_dir_all(&work); // leftovers from an interrupted run
+    #[cfg(target_os = "android")]
+    {
+        let _ = ffmpeg;
+        if let Some(h) = app.try_state::<mobile::YtdlHandle>() {
+            let out = android_output_dir(false)
+                .or_else(|| app.path().app_data_dir().ok().map(|d| d.join("Converted")))
+                .unwrap_or_else(|| work.join("out"));
+            let downloader = mobile::MobileYtdl { handle: h.0.clone() };
+            downloader.update_daily(&app.path().app_data_dir().unwrap_or_else(|_| work.clone()));
+            engine.set_downloader(Arc::new(downloader), work, out);
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let Some(mut ytdlp) = YtDlp::locate(&tool_dirs(app), ffmpeg) else { return };
+        if let Ok(data) = app.path().app_data_dir() {
+            ytdlp.make_updatable(&data);
+        }
+        let out = app
+            .path()
+            .video_dir()
+            .or_else(|_| app.path().home_dir())
+            .map(|d| d.join("Pocket Reel"))
+            .unwrap_or_else(|_| work.join("out"));
+        engine.set_downloader(Arc::new(ytdlp), work, out);
+    }
+}
+
+fn ytdl_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    tauri::plugin::Builder::new("ytdl")
+        .setup(|app, api| {
+            #[cfg(target_os = "android")]
+            {
+                let handle = api.register_android_plugin("app.pocketreel.converter", "YtdlPlugin")?;
+                app.manage(mobile::YtdlHandle(handle));
+            }
+            let _ = (app, api);
+            Ok(())
+        })
+        .build()
+}
+
+#[cfg(target_os = "android")]
+mod mobile {
+    use std::path::{Path, PathBuf};
+    use std::sync::mpsc;
+    use std::time::{Duration, SystemTime};
+
+    use pocketreel_engine::download::{friendly_error, Downloader, RemoteInfo};
+    use pocketreel_engine::{CancelToken, Error, Result};
+    use serde::Deserialize;
+    use serde_json::json;
+    use tauri::plugin::PluginHandle;
+
+    pub struct YtdlHandle(pub PluginHandle<tauri::Wry>);
+
+    #[derive(Deserialize)]
+    pub struct SharedResp {
+        pub url: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct InfoResp {
+        id: Option<String>,
+        title: Option<String>,
+        duration: Option<f64>,
+        thumbnail: Option<String>,
+        uploader: Option<String>,
+        url: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct PathResp {
+        path: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    struct ProgResp {
+        progress: f64,
+        eta: i64,
+    }
+
+    pub struct MobileYtdl {
+        pub handle: PluginHandle<tauri::Wry>,
+    }
+
+    fn err(e: impl std::fmt::Display) -> Error {
+        let text = e.to_string();
+        if text.contains("Canceled") {
+            Error::Canceled
+        } else {
+            Error::Download(friendly_error(&text))
+        }
+    }
+
+    impl MobileYtdl {
+        /// YouTube changes often; refresh yt-dlp at most once a day.
+        pub fn update_daily(&self, data_dir: &Path) {
+            let stamp = data_dir.join("yt-dlp-last-update");
+            let stale = std::fs::metadata(&stamp)
+                .and_then(|m| m.modified())
+                .map(|t| SystemTime::now().duration_since(t).unwrap_or_default() > Duration::from_secs(86_400))
+                .unwrap_or(true);
+            if stale {
+                let h = self.handle.clone();
+                std::thread::spawn(move || {
+                    if h.run_mobile_plugin::<serde_json::Value>("update", ()).is_ok() {
+                        let _ = std::fs::write(&stamp, b"ok");
+                    }
+                });
+            }
+        }
+    }
+
+    impl Downloader for MobileYtdl {
+        fn info(&self, url: &str) -> Result<RemoteInfo> {
+            let r: InfoResp = self.handle.run_mobile_plugin("info", json!({ "url": url })).map_err(err)?;
+            Ok(RemoteInfo {
+                url: r.url.unwrap_or_else(|| url.to_string()),
+                id: r.id.unwrap_or_default(),
+                title: r.title.filter(|t| !t.is_empty()).unwrap_or_else(|| "Video".into()),
+                duration: r.duration.filter(|d| *d > 0.0),
+                thumbnail: r.thumbnail,
+                uploader: r.uploader,
+            })
+        }
+
+        fn download(
+            &self,
+            url: &str,
+            dir: &Path,
+            cancel: &CancelToken,
+            on_progress: &mut dyn FnMut(f64, Option<f64>),
+        ) -> Result<PathBuf> {
+            std::fs::create_dir_all(dir)?;
+            let id = format!(
+                "dl-{}",
+                SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+            );
+            let (tx, rx) = mpsc::channel();
+            let h = self.handle.clone();
+            let args = json!({ "url": url, "dir": dir.to_string_lossy(), "id": id });
+            std::thread::spawn(move || {
+                let _ = tx.send(h.run_mobile_plugin::<PathResp>("download", args));
+            });
+            // youtubedl-android reports percent per stream; video first, then audio.
+            let mut stream = 0usize;
+            let mut last = 0.0f64;
+            loop {
+                if cancel.is_canceled() {
+                    let _ = self.handle.run_mobile_plugin::<serde_json::Value>("cancel", json!({ "id": id }));
+                }
+                match rx.recv_timeout(Duration::from_millis(500)) {
+                    Ok(res) => {
+                        if cancel.is_canceled() {
+                            return Err(Error::Canceled);
+                        }
+                        let r = res.map_err(err)?;
+                        let path = r
+                            .path
+                            .map(PathBuf::from)
+                            .filter(|p| p.is_file())
+                            .ok_or_else(|| Error::Download("The download finished but no video file was found.".into()))?;
+                        on_progress(1.0, Some(0.0));
+                        return Ok(path);
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if let Ok(p) = self.handle.run_mobile_plugin::<ProgResp>("progress", json!({ "id": id })) {
+                            let pct = p.progress.clamp(0.0, 100.0);
+                            if pct + 5.0 < last {
+                                stream += 1;
+                            }
+                            last = pct;
+                            let f = pct / 100.0;
+                            let overall = if stream == 0 { f * 0.82 } else { 0.82 + f * 0.16 };
+                            on_progress(overall, (p.eta >= 0).then_some(p.eta as f64));
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        return Err(Error::Download("The download stopped unexpectedly.".into()))
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(ytdl_plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
@@ -297,9 +521,12 @@ pub fn run() {
                 let result = match Tools::locate(&tool_dirs(&handle)) {
                     Ok(tools) => {
                         let emitter = handle.clone();
-                        Ok(Engine::new(tools, move |ev: Event| {
+                        let ffmpeg = tools.ffmpeg.clone();
+                        let engine = Engine::new(tools, move |ev: Event| {
                             let _ = emitter.emit("engine-event", ev);
-                        }))
+                        });
+                        setup_downloads(&handle, &engine, &ffmpeg);
+                        Ok(engine)
                     }
                     Err(e) => Err(e.to_string()),
                 };
@@ -331,7 +558,9 @@ pub fn run() {
             retry,
             jobs,
             set_concurrency,
-            import_uris
+            import_uris,
+            link_info,
+            take_shared_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running Pocket Reel");

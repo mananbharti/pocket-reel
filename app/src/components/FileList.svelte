@@ -3,6 +3,7 @@
   import { app } from "../lib/store.svelte";
   import { springIn, collapseOut } from "../lib/motion";
   import FileRow from "./FileRow.svelte";
+  import LinkBox from "./LinkBox.svelte";
 
   const doneCount = $derived(app.items.filter((i) => app.jobFor(i)?.state === "done").length);
 </script>
@@ -21,6 +22,9 @@
       </li>
     {/each}
   </ul>
+  {#if app.canDownload}
+    <div class="linkrow"><LinkBox /></div>
+  {/if}
   <button type="button" class="more" onclick={() => app.pickFiles()}>
     <span class="plus" aria-hidden="true">+</span> Add more videos
   </button>
@@ -54,6 +58,9 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+  .linkrow {
+    margin-bottom: 10px;
   }
   .more {
     width: 100%;

@@ -6,11 +6,16 @@
 3. Pick a real MP4 with Android's document picker.
 4. Convert it with the default "Classic player AVI" preset inside the app.
 5. Pull the result and verify it with ffprobe on the host.
+6. Share a video link to the app (like YouTube's Share button does); it is
+   downloaded with yt-dlp on the device and converted on its own.
 
 Screenshots of every step are written to the output folder.
 Usage: android-smoke.py <apk> <screenshot-dir>
 """
+import functools
+import http.server
 import os
+import threading
 import re
 import subprocess
 import sys
@@ -165,3 +170,49 @@ frames = subprocess.run(["ffmpeg", "-v", "error", "-i", "converted.avi", "-f", "
                         capture_output=True, text=True)
 assert frames.returncode == 0 and not frames.stderr.strip(), frames.stderr
 print(f"OK: {remote} is a valid classic-player AVI")
+
+
+def check_avi(path):
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_name,width,height,sample_rate,channels",
+         "-of", "csv=p=0", path], capture_output=True, text=True, check=True).stdout
+    assert "mjpeg,160,120" in probe and "adpcm_ima_wav,22050,1" in probe, probe
+
+
+print("Sharing a video link to the app")
+os.makedirs("web", exist_ok=True)
+os.replace("sample.mp4", "web/clip.mp4")
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory="web")
+server = http.server.ThreadingHTTPServer(("0.0.0.0", 8765), handler)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+# 10.0.2.2 is the host as seen from the emulator.
+adb("shell", "am", "start", "-a", "android.intent.action.SEND", "-t", "text/plain",
+    "--es", "android.intent.extra.TEXT", "'Look at this http://10.0.2.2:8765/clip.mp4'", "-n",
+    f"{PKG}/.MainActivity")
+time.sleep(5)
+shot("05-shared")
+deadline = time.time() + 300
+linked = None
+while time.time() < deadline and not linked:
+    for base in bases:
+        for line in adb("shell", "ls", "-1", f"'{base}'", check=False).splitlines():
+            if line.strip() == "clip.avi":
+                linked = base + "clip.avi"
+    if not linked:
+        for n in nodes():
+            if re.search(r"couldn.t|can.t|failed|isn.t", n["text"], re.I) and "clip" not in n["text"]:
+                shot("05-share-error")
+                print("Visible:", [x["text"].strip() for x in nodes() if x["text"].strip()][:30])
+                break
+        time.sleep(3)
+time.sleep(4)
+shot("06-link-converted")
+with open(os.path.join(outdir, "logcat-share.txt"), "w") as f:
+    f.write(adb("logcat", "-d", "-t", "1500", check=False))
+server.shutdown()
+if not linked:
+    texts = [n["text"].strip() for n in nodes() if n["text"].strip()]
+    raise SystemExit(f"The shared link was not converted. Visible: {texts[:40]}")
+adb("pull", linked, "linked.avi")
+check_avi("linked.avi")
+print(f"OK: shared link converted to {linked}")
