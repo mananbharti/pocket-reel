@@ -152,7 +152,7 @@ pub fn parse_ffprobe_json(path: &Path, json: &str, size_bytes: u64) -> Result<Me
     if video.is_none() && audio.is_none() {
         return Err(Error::Probe {
             path: path.to_path_buf(),
-            message: "no audio or video streams were found".into(),
+            message: "This file has no audio or video.".into(),
         });
     }
     let title = format.get("tags").and_then(|t| t.get("title")).and_then(Value::as_str).map(str::to_string);
@@ -169,12 +169,26 @@ pub fn parse_ffprobe_json(path: &Path, json: &str, size_bytes: u64) -> Result<Me
     })
 }
 
+/// Turn ffprobe's stderr into a short sentence for people.
+pub fn friendly_probe_error(stderr: &str) -> String {
+    let l = stderr.to_ascii_lowercase();
+    if l.contains("moov atom not found") || l.contains("truncat") || l.contains("end of file") {
+        "This file is incomplete or damaged.".into()
+    } else if l.contains("invalid data") || l.contains("unknown format") || l.is_empty() {
+        "This isn't a video or audio file Pocket Reel can read.".into()
+    } else if l.contains("permission denied") {
+        "Pocket Reel isn't allowed to open this file.".into()
+    } else {
+        stderr.lines().last().unwrap_or("Unreadable file").to_string()
+    }
+}
+
 /// Probe a media file.
 pub fn probe(tools: &Tools, path: &Path) -> Result<MediaInfo> {
     let meta = std::fs::metadata(path)
-        .map_err(|e| Error::Probe { path: path.to_path_buf(), message: e.to_string() })?;
+        .map_err(|_| Error::Probe { path: path.to_path_buf(), message: "This file can't be found.".into() })?;
     if !meta.is_file() {
-        return Err(Error::Probe { path: path.to_path_buf(), message: "not a file".into() });
+        return Err(Error::Probe { path: path.to_path_buf(), message: "This is a folder, not a file.".into() });
     }
     let out = tools
         .ffprobe_cmd()
@@ -183,10 +197,7 @@ pub fn probe(tools: &Tools, path: &Path) -> Result<MediaInfo> {
         .output()?;
     if !out.status.success() {
         let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(Error::Probe {
-            path: path.to_path_buf(),
-            message: if msg.is_empty() { "unsupported or damaged file".into() } else { msg },
-        });
+        return Err(Error::Probe { path: path.to_path_buf(), message: friendly_probe_error(&msg) });
     }
     parse_ffprobe_json(path, &String::from_utf8_lossy(&out.stdout), meta.len())
 }

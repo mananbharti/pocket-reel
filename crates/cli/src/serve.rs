@@ -1,9 +1,10 @@
 //! A small HTTP bridge exposing the engine to the web UI during development
 //! and for browser-based testing. Binds to 127.0.0.1 only.
 
-use std::io::{Cursor, Read};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -11,7 +12,6 @@ use base64::Engine as _;
 use pocketreel_engine::{plan, presets, preview, probe, Engine, JobRequest, Settings, Tools};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 pub fn b64decode(s: &str) -> Vec<u8> {
     base64::engine::general_purpose::STANDARD.decode(s).unwrap_or_default()
@@ -26,37 +26,61 @@ struct Ctx {
     uploads: PathBuf,
 }
 
-struct SseReader {
-    rx: Receiver<String>,
-    buf: Cursor<Vec<u8>>,
+/// A parsed HTTP/1.1 request. Bodies are read completely up front.
+struct Request {
+    method: String,
+    url: String,
+    body: Vec<u8>,
 }
 
-impl Read for SseReader {
-    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
-        loop {
-            let n = self.buf.read(out)?;
-            if n > 0 {
-                return Ok(n);
+fn read_request(stream: &mut BufReader<TcpStream>) -> Option<Request> {
+    let mut line = String::new();
+    stream.read_line(&mut line).ok()?;
+    let mut parts = line.split_whitespace();
+    let method = parts.next()?.to_string();
+    let url = parts.next()?.to_string();
+    let mut len = 0usize;
+    loop {
+        let mut h = String::new();
+        if stream.read_line(&mut h).ok()? == 0 {
+            break;
+        }
+        let h = h.trim_end();
+        if h.is_empty() {
+            break;
+        }
+        if let Some((k, v)) = h.split_once(':') {
+            if k.eq_ignore_ascii_case("content-length") {
+                len = v.trim().parse().unwrap_or(0);
             }
-            let msg = match self.rx.recv_timeout(Duration::from_secs(15)) {
-                Ok(m) => format!("data: {m}\n\n"),
-                Err(RecvTimeoutError::Timeout) => ": ping\n\n".to_string(),
-                Err(RecvTimeoutError::Disconnected) => return Ok(0),
-            };
-            self.buf = Cursor::new(msg.into_bytes());
         }
     }
+    let mut body = vec![0u8; len];
+    stream.read_exact(&mut body).ok()?;
+    Some(Request { method, url, body })
 }
 
-fn header(k: &str, v: &str) -> Header {
-    Header::from_bytes(k.as_bytes(), v.as_bytes()).unwrap()
+fn write_head(out: &mut TcpStream, status: u16, ctype: &str, len: Option<u64>) -> std::io::Result<()> {
+    let reason = match status {
+        200 => "OK",
+        400 => "Bad Request",
+        404 => "Not Found",
+        _ => "Error",
+    };
+    write!(out, "HTTP/1.1 {status} {reason}\r\nContent-Type: {ctype}\r\nCache-Control: no-store\r\nConnection: close\r\n")?;
+    if let Some(l) = len {
+        write!(out, "Content-Length: {l}\r\n")?;
+    }
+    write!(out, "\r\n")
 }
 
-fn json_response(status: u16, v: &Value) -> Response<Cursor<Vec<u8>>> {
-    Response::from_data(serde_json::to_vec(v).unwrap())
-        .with_status_code(StatusCode(status))
-        .with_header(header("Content-Type", "application/json"))
-        .with_header(header("Cache-Control", "no-store"))
+fn send(out: &mut TcpStream, status: u16, ctype: &str, data: &[u8]) {
+    let _ = write_head(out, status, ctype, Some(data.len() as u64)).and_then(|_| out.write_all(data));
+    let _ = out.flush();
+}
+
+fn send_json(out: &mut TcpStream, status: u16, v: &Value) {
+    send(out, status, "application/json", &serde_json::to_vec(v).unwrap());
 }
 
 fn ok<T: serde::Serialize>(v: T) -> (u16, Value) {
@@ -68,7 +92,7 @@ fn err(msg: impl ToString) -> (u16, Value) {
 }
 
 fn body<T: for<'de> Deserialize<'de>>(req: &mut Request) -> Result<T, String> {
-    serde_json::from_reader(req.as_reader()).map_err(|e| format!("bad request: {e}"))
+    serde_json::from_slice(&req.body).map_err(|e| format!("bad request: {e}"))
 }
 
 #[derive(Deserialize)]
@@ -154,25 +178,25 @@ fn mime(path: &Path) -> &'static str {
 }
 
 fn api(ctx: &Ctx, req: &mut Request) -> (u16, Value) {
-    let url = req.url().to_string();
+    let url = req.url.clone();
     let path = url.split('?').next().unwrap_or("").to_string();
     let t = ctx.engine.tools();
-    match (req.method().clone(), path.as_str()) {
-        (Method::Get, "/api/info") => ok(json!({
+    match (req.method.as_str(), path.as_str()) {
+        ("GET", "/api/info") => ok(json!({
             "platform": "web",
             "ffmpeg": t.version,
             "defaultOutputDir": ctx.uploads.join("converted").to_string_lossy(),
         })),
-        (Method::Get, "/api/presets") => ok(presets::catalog_for(t)),
-        (Method::Get, "/api/jobs") => ok(ctx.engine.jobs()),
-        (Method::Post, "/api/probe") => match body::<PathArg>(req) {
+        ("GET", "/api/presets") => ok(presets::catalog_for(t)),
+        ("GET", "/api/jobs") => ok(ctx.engine.jobs()),
+        ("POST", "/api/probe") => match body::<PathArg>(req) {
             Ok(a) => match probe::probe(t, Path::new(&a.path)) {
                 Ok(m) => ok(m),
                 Err(e) => err(e),
             },
             Err(e) => err(e),
         },
-        (Method::Post, "/api/thumbnail") => match body::<ThumbArg>(req) {
+        ("POST", "/api/thumbnail") => match body::<ThumbArg>(req) {
             Ok(a) => {
                 let r = probe::probe(t, Path::new(&a.path)).and_then(|m| {
                     let at = a.at.unwrap_or((m.duration * 0.1).min(5.0));
@@ -185,14 +209,14 @@ fn api(ctx: &Ctx, req: &mut Request) -> (u16, Value) {
             }
             Err(e) => err(e),
         },
-        (Method::Post, "/api/plan") => match body::<PlanArg>(req) {
+        ("POST", "/api/plan") => match body::<PlanArg>(req) {
             Ok(a) => match probe::probe(t, Path::new(&a.path)).and_then(|m| plan::resolve(t, &a.settings, &m)) {
                 Ok(p) => ok(p),
                 Err(e) => err(e),
             },
             Err(e) => err(e),
         },
-        (Method::Post, "/api/estimate") => match body::<PlanArg>(req) {
+        ("POST", "/api/estimate") => match body::<PlanArg>(req) {
             Ok(a) => {
                 let r = probe::probe(t, Path::new(&a.path))
                     .and_then(|m| plan::resolve(t, &a.settings, &m))
@@ -204,7 +228,7 @@ fn api(ctx: &Ctx, req: &mut Request) -> (u16, Value) {
             }
             Err(e) => err(e),
         },
-        (Method::Post, "/api/preview") => match body::<PlanArg>(req) {
+        ("POST", "/api/preview") => match body::<PlanArg>(req) {
             Ok(a) => {
                 let r = probe::probe(t, Path::new(&a.path)).and_then(|m| {
                     let p = plan::resolve(t, &a.settings, &m)?;
@@ -218,44 +242,40 @@ fn api(ctx: &Ctx, req: &mut Request) -> (u16, Value) {
             }
             Err(e) => err(e),
         },
-        (Method::Post, "/api/enqueue") => match body::<JobRequest>(req) {
+        ("POST", "/api/enqueue") => match body::<JobRequest>(req) {
             Ok(r) => match ctx.engine.enqueue(r) {
                 Ok(s) => ok(s),
                 Err(e) => err(e),
             },
             Err(e) => err(e),
         },
-        (Method::Post, "/api/cancel") => match body::<IdArg>(req) {
+        ("POST", "/api/cancel") => match body::<IdArg>(req) {
             Ok(a) => ok(ctx.engine.cancel(a.id)),
             Err(e) => err(e),
         },
-        (Method::Post, "/api/cancel-all") => {
+        ("POST", "/api/cancel-all") => {
             ctx.engine.cancel_all();
             ok(true)
         }
-        (Method::Post, "/api/remove") => match body::<IdArg>(req) {
+        ("POST", "/api/remove") => match body::<IdArg>(req) {
             Ok(a) => ok(ctx.engine.remove(a.id)),
             Err(e) => err(e),
         },
-        (Method::Post, "/api/retry") => match body::<IdArg>(req) {
+        ("POST", "/api/retry") => match body::<IdArg>(req) {
             Ok(a) => match ctx.engine.retry(a.id) {
                 Ok(s) => ok(s),
                 Err(e) => err(e),
             },
             Err(e) => err(e),
         },
-        (Method::Post, "/api/upload") => {
+        ("POST", "/api/upload") => {
             let name = query_param(&url, "name").unwrap_or_else(|| "upload.bin".into());
             let safe: String = name
                 .chars()
                 .map(|c| if c.is_alphanumeric() || " ._-()".contains(c) { c } else { '_' })
                 .collect();
             let dest = ctx.uploads.join(safe.trim_start_matches('.'));
-            let mut data = Vec::new();
-            if let Err(e) = req.as_reader().read_to_end(&mut data) {
-                return err(e);
-            }
-            match std::fs::write(&dest, data) {
+            match std::fs::write(&dest, &req.body) {
                 Ok(()) => ok(json!({ "path": dest.to_string_lossy() })),
                 Err(e) => err(e),
             }
@@ -264,59 +284,68 @@ fn api(ctx: &Ctx, req: &mut Request) -> (u16, Value) {
     }
 }
 
-fn handle(ctx: Arc<Ctx>, mut req: Request) {
-    let url = req.url().to_string();
+fn handle(ctx: Arc<Ctx>, stream: TcpStream) {
+    let mut out = match stream.try_clone() {
+        Ok(o) => o,
+        Err(_) => return,
+    };
+    let mut reader = BufReader::new(stream);
+    let Some(mut req) = read_request(&mut reader) else { return };
+    let url = req.url.clone();
     let path = url.split('?').next().unwrap_or("/").to_string();
+    if std::env::var_os("POCKETREEL_LOG").is_some() {
+        eprintln!("{} {}", req.method, url.chars().take(80).collect::<String>());
+    }
     if path == "/api/events" {
         let (tx, rx) = mpsc::channel();
         ctx.subs.lock().unwrap().push(tx);
+        if write_head(&mut out, 200, "text/event-stream", None).is_err() {
+            return;
+        }
         let initial = serde_json::to_string(&json!({ "type": "snapshot", "jobs": ctx.engine.jobs() })).unwrap();
-        let reader = SseReader { rx, buf: Cursor::new(format!("data: {initial}\n\n").into_bytes()) };
-        let resp = Response::new(
-            StatusCode(200),
-            vec![header("Content-Type", "text/event-stream"), header("Cache-Control", "no-store")],
-            reader,
-            None,
-            None,
-        );
-        let _ = req.respond(resp);
-        return;
+        let mut msg = format!("data: {initial}\n\n");
+        loop {
+            if out.write_all(msg.as_bytes()).and_then(|_| out.flush()).is_err() {
+                return;
+            }
+            msg = match rx.recv_timeout(Duration::from_secs(15)) {
+                Ok(m) => format!("data: {m}\n\n"),
+                Err(RecvTimeoutError::Timeout) => ": ping\n\n".to_string(),
+                Err(RecvTimeoutError::Disconnected) => return,
+            };
+        }
     }
     if path == "/api/file" {
         let Some(p) = query_param(&url, "path") else {
-            let _ = req.respond(json_response(400, &json!({"error": "path required"})));
-            return;
+            return send_json(&mut out, 400, &json!({"error": "path required"}));
         };
         let p = PathBuf::from(p);
         match std::fs::File::open(&p) {
-            Ok(f) => {
-                let resp = Response::from_file(f).with_header(header("Content-Type", mime(&p)));
-                let _ = req.respond(resp);
+            Ok(mut f) => {
+                let len = f.metadata().map(|m| m.len()).ok();
+                if write_head(&mut out, 200, mime(&p), len).is_ok() {
+                    let _ = std::io::copy(&mut f, &mut out);
+                }
             }
-            Err(e) => {
-                let _ = req.respond(json_response(404, &json!({"error": e.to_string()})));
-            }
+            Err(e) => send_json(&mut out, 404, &json!({"error": e.to_string()})),
         }
         return;
     }
     if path.starts_with("/api/") {
         let (status, v) = api(&ctx, &mut req);
-        let _ = req.respond(json_response(status, &v));
-        return;
+        return send_json(&mut out, status, &v);
     }
-    // Static UI
     if let Some(root) = &ctx.ui {
         let rel = path.trim_start_matches('/');
         let mut file = root.join(if rel.is_empty() { "index.html" } else { rel });
         if rel.contains("..") || !file.is_file() {
             file = root.join("index.html");
         }
-        if let Ok(f) = std::fs::File::open(&file) {
-            let _ = req.respond(Response::from_file(f).with_header(header("Content-Type", mime(&file))));
-            return;
+        if let Ok(data) = std::fs::read(&file) {
+            return send(&mut out, 200, mime(&file), &data);
         }
     }
-    let _ = req.respond(Response::from_string("Not found").with_status_code(StatusCode(404)));
+    send(&mut out, 404, "text/plain", b"Not found");
 }
 
 pub fn serve(tools: Tools, port: u16, ui: Option<PathBuf>, uploads: Option<PathBuf>) -> Result<(), String> {
@@ -328,12 +357,12 @@ pub fn serve(tools: Tools, port: u16, ui: Option<PathBuf>, uploads: Option<PathB
         let msg = serde_json::to_string(&ev).unwrap();
         sink_subs.lock().unwrap().retain(|s| s.send(msg.clone()).is_ok());
     });
-    let server = Server::http(("127.0.0.1", port)).map_err(|e| e.to_string())?;
+    let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| e.to_string())?;
     eprintln!("Pocket Reel bridge on http://127.0.0.1:{port}  (uploads: {})", uploads.display());
     let ctx = Arc::new(Ctx { engine, subs, ui, uploads });
-    for req in server.incoming_requests() {
+    for stream in listener.incoming().flatten() {
         let ctx = ctx.clone();
-        std::thread::spawn(move || handle(ctx, req));
+        std::thread::spawn(move || handle(ctx, stream));
     }
     Ok(())
 }

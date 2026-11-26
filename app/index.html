@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <title>Pocket Reel</title>
+    <script>
+      // Apply the saved theme before first paint to avoid a flash.
+      try {
+        const p = JSON.parse(localStorage.getItem("pocketreel.prefs") || "{}");
+        const root = document.documentElement;
+        if (p.theme === "light" || p.theme === "dark") root.dataset.theme = p.theme;
+        if (p.contrast === "high") root.dataset.contrast = "high";
+        if (p.motion === "reduce") root.dataset.motion = "reduce";
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

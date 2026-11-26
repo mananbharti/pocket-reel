@@ -1,0 +1,56 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Pocket Reel",
+  "version": "1.0.0",
+  "identifier": "app.pocketreel.converter",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Pocket Reel",
+        "width": 1120,
+        "height": 780,
+        "minWidth": 720,
+        "minHeight": 560,
+        "center": true,
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "appimage", "nsis", "msi"],
+    "category": "Video",
+    "shortDescription": "Convert videos for any player",
+    "longDescription": "Pocket Reel converts MP4 and almost any other video for classic MP3/MP4 players (the exact AVI format of the original Actions converter), phones, TVs and the web, and extracts audio as MP3, AAC, FLAC or WAV.",
+    "copyright": "© 2026 Manan Bharti. GPL-3.0-or-later.",
+    "license": "GPL-3.0-or-later",
+    "homepage": "https://github.com/mananbharti/pocket-reel",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "resources/ffmpeg/": "ffmpeg/"
+    },
+    "linux": {
+      "deb": { "depends": [] },
+      "appimage": { "bundleMediaFramework": false }
+    },
+    "windows": {
+      "nsis": { "installMode": "currentUser" }
+    }
+  }
+}

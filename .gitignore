@@ -6,8 +6,9 @@ dist/
 /app/src-tauri/gen/
 /app/src-tauri/target/
 /app/src-tauri/binaries/
-/app/src-tauri/resources/ffmpeg/
+/app/src-tauri/resources/ffmpeg/ff*
 /.vite/
 *.log
 .env
 .env.*
+/.claude/

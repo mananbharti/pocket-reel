@@ -4,7 +4,7 @@ use std::path::PathBuf;
 pub enum Error {
     #[error("{0} was not found. Pocket Reel needs FFmpeg to read and convert media.")]
     ToolMissing(&'static str),
-    #[error("Could not read \"{path}\": {message}")]
+    #[error("{message}")]
     Probe { path: PathBuf, message: String },
     #[error("This file has no {0} stream.")]
     MissingStream(&'static str),
