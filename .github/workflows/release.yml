@@ -249,7 +249,7 @@ jobs:
     if: >-
       always() && needs.android-test.result == 'success' &&
       (needs.publish.result == 'success' || (inputs.android_only && needs.publish.result == 'skipped')) &&
-      (github.ref_type == 'tag' || inputs.tag != '')'
+      (github.ref_type == 'tag' || inputs.tag != '')
     runs-on: ubuntu-24.04
     env:
       TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}
