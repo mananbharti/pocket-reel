@@ -132,9 +132,17 @@ jobs:
           npm ci
           npx tauri android init --ci
           python3 ../scripts/patch-android.py ../android-ffmpeg
+      - uses: gradle/actions/setup-gradle@v4
       - name: Build APK
         working-directory: app
-        run: npx tauri android build --apk --ci --target aarch64 --target x86_64
+        run: |
+          # Maven Central sometimes rate-limits CI runners (HTTP 429); retry.
+          for i in 1 2 3; do
+            npx tauri android build --apk --ci --target aarch64 --target x86_64 && exit 0
+            echo "::warning::Android build attempt $i failed; retrying in 60 s"
+            sleep 60
+          done
+          exit 1
       - name: Sign APK
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE }}

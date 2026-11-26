@@ -9,7 +9,7 @@ use std::sync::Arc;
 use pocketreel_engine::download::extract_url;
 use pocketreel_engine::{
     plan, presets, preview, probe, Engine, Estimate, Event, JobRequest, JobSnapshot, MediaInfo, Plan, Preset,
-    RemoteInfo, Settings, Tools, YtDlp,
+    RemoteInfo, Settings, Tools,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -347,7 +347,7 @@ fn setup_downloads(app: &AppHandle, engine: &Engine, ffmpeg: &Path) {
     }
     #[cfg(not(target_os = "android"))]
     {
-        let Some(mut ytdlp) = YtDlp::locate(&tool_dirs(app), ffmpeg) else { return };
+        let Some(mut ytdlp) = pocketreel_engine::YtDlp::locate(&tool_dirs(app), ffmpeg) else { return };
         if let Ok(data) = app.path().app_data_dir() {
             ytdlp.make_updatable(&data);
         }
