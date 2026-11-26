@@ -191,7 +191,10 @@ export class AppState {
       const paths = await this.api.pickFiles();
       if (paths.length) await this.addPaths(paths);
     } catch (e) {
-      this.toast("error", e instanceof Error ? e.message : String(e));
+      console.error("pickFiles failed", e);
+      const msg = e instanceof Error ? e.message : String(e);
+      this.toast("error", `Couldn't open those files: ${msg}`, 12000);
+      this.announce(`Couldn't open those files. ${msg}`);
     }
   }
 

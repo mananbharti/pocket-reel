@@ -112,6 +112,11 @@ except SystemExit:
     time.sleep(2)
     item = find(r"sample", timeout=15)
 tap(item)
+time.sleep(2.5)
+shot("03-after-pick")
+with open(os.path.join(outdir, "logcat.txt"), "w") as f:
+    f.write(adb("logcat", "-d", "-t", "800", check=False))
+print("Visible after pick:", [n["text"].strip() for n in nodes() if n["text"].strip()][:30])
 
 print("Waiting for the file to be read and estimated")
 convert = find(r"^\s*Convert 1 video\s*$", timeout=60)
@@ -134,6 +139,8 @@ while time.time() < deadline and not remote:
     time.sleep(2)
 time.sleep(4)
 shot("04-converted")
+with open(os.path.join(outdir, "logcat-end.txt"), "w") as f:
+    f.write(adb("logcat", "-d", "-t", "800", check=False))
 if not remote:
     raise SystemExit("No converted file appeared")
 print("output:", remote)
