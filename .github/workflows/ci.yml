@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    name: Engine tests (real FFmpeg)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Unit, fidelity and end-to-end tests
+        run: cargo test --release -p pocketreel-engine -p pocketreel-cli
+      - name: CLI smoke test
+        run: |
+          ffmpeg -v error -f lavfi -i testsrc2=size=640x360:rate=25:duration=4 -f lavfi -i sine=d=4 -c:v libx264 -c:a aac sample.mp4
+          ./target/release/pocketreel estimate sample.mp4 -p classic-avi
+          ./target/release/pocketreel convert sample.mp4 -p classic-avi -o out
+          ./target/release/pocketreel convert sample.mp4 -p mp3 -o out
+          ffprobe -v error -show_entries stream=codec_name,width,height -of csv=p=0 out/sample.avi
+          ffprobe -v error -show_entries stream=codec_name -of csv=p=0 out/sample.mp3
+
+  ui:
+    name: UI type check and build
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run build

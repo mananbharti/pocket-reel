@@ -17,6 +17,19 @@
         if (p.contrast === "high") root.dataset.contrast = "high";
         if (p.motion === "reduce") root.dataset.motion = "reduce";
       } catch (e) {}
+      // Last-resort error screen, so a failure is never a silent blank window.
+      window.__fatal = function (msg) {
+        if (document.getElementById("fatal")) return;
+        var d = document.createElement("div");
+        d.id = "fatal";
+        d.setAttribute("role", "alert");
+        d.style.cssText = "position:fixed;inset:0;display:grid;place-content:center;padding:24px;text-align:center;font:15px/1.5 system-ui,sans-serif;background:#f5f5f7;color:#1d1d1f;z-index:9999";
+        d.innerHTML = "<h2 style=\"margin:0 0 8px\">Pocket Reel hit a problem</h2><p style=\"margin:0;max-width:520px;color:#6e6e73\"></p>";
+        d.querySelector("p").textContent = String(msg);
+        (document.body || document.documentElement).appendChild(d);
+      };
+      window.addEventListener("error", function (e) { window.__fatal(e.message + " (" + (e.filename || "") + ":" + (e.lineno || "") + ")"); });
+      window.addEventListener("unhandledrejection", function (e) { window.__fatal(e.reason && e.reason.stack ? e.reason.stack : e.reason); });
     </script>
   </head>
   <body>

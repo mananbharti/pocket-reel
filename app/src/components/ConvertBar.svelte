@@ -5,8 +5,15 @@
 
   const count = $derived(app.pending.length || app.convertible.length);
   const again = $derived(!app.pending.length && app.convertible.length > 0);
+  const busyOnly = $derived(app.active.length > 0 && app.pending.length === 0);
   const label = $derived(
-    count === 0 ? "Convert" : again ? `Convert ${count === 1 ? "Again" : `${count} Again`}` : `Convert ${count} ${count === 1 ? "File" : "Files"}`,
+    busyOnly
+      ? "Converting…"
+      : count === 0
+        ? "Convert"
+        : again
+          ? `Convert ${count === 1 ? "Again" : `${count} Again`}`
+          : `Convert ${count} ${count === 1 ? "File" : "Files"}`,
   );
 </script>
 
@@ -18,7 +25,7 @@
       <span class="big">{app.estimatesPending ? "Estimating…" : `≈ ${bytes(app.totalEstimate)}`}</span>
       <span class="muted">total output</span>
     {:else if app.active.length}
-      <span class="muted">Working…</span>
+      <span class="visually-hidden">{app.active.length} in queue</span>
     {:else}
       <span class="muted">All done</span>
     {/if}
@@ -31,7 +38,7 @@
   <button
     type="button"
     class="btn primary large go"
-    disabled={count === 0 || !app.preset?.available}
+    disabled={busyOnly || count === 0 || !app.preset?.available}
     aria-keyshortcuts="Control+Enter"
     onclick={() => app.convert()}
   >
@@ -67,6 +74,9 @@
   .muted {
     font-size: 12.5px;
     color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .go {
     min-width: 168px;

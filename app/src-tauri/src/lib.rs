@@ -167,9 +167,20 @@ fn android_output_dir(audio: bool) -> Option<PathBuf> {
     if !cfg!(target_os = "android") {
         return None;
     }
-    let base = PathBuf::from("/storage/emulated/0").join(if audio { "Music" } else { "Movies" }).join("Pocket Reel");
-    std::fs::create_dir_all(&base).ok()?;
-    Some(base)
+    let kind = if audio { "Music" } else { "Movies" };
+    // Shared Movies/Music folders (Android 11+), else the app's own external folder.
+    let candidates = [
+        PathBuf::from("/storage/emulated/0").join(kind).join("Pocket Reel"),
+        PathBuf::from("/storage/emulated/0/Android/data/app.pocketreel.converter/files").join(kind),
+    ];
+    candidates.into_iter().find(|dir| {
+        std::fs::create_dir_all(dir).is_ok() && {
+            let probe = dir.join(".pocketreel-write-test");
+            let ok = std::fs::write(&probe, b"ok").is_ok();
+            let _ = std::fs::remove_file(&probe);
+            ok
+        }
+    })
 }
 
 #[tauri::command]
@@ -230,7 +241,18 @@ async fn import_uris(app: AppHandle, uris: Vec<String>) -> Result<Vec<String>, S
         let mut opts = tauri_plugin_fs::OpenOptions::new();
         opts.read(true);
         let mut src = app.fs().open(fp, opts).map_err(|e| e.to_string())?;
-        let tail = uri.rsplit(['/', ':']).next().unwrap_or("video").replace("%20", " ");
+        // The descriptor behind a content:// URI usually points at the real file,
+        // which gives the original name ("Holiday.mp4" instead of "video:1234").
+        let mut tail = uri.rsplit(['/', ':']).next().unwrap_or("video").replace("%20", " ");
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            if let Ok(real) = std::fs::read_link(format!("/proc/self/fd/{}", src.as_raw_fd())) {
+                if let Some(n) = real.file_name() {
+                    tail = n.to_string_lossy().to_string();
+                }
+            }
+        }
         let clean: String =
             tail.chars().map(|c| if c.is_alphanumeric() || " ._-()".contains(c) { c } else { '_' }).collect();
         let name = if clean.contains('.') { clean } else { format!("Video {clean}") };
@@ -242,6 +264,7 @@ async fn import_uris(app: AppHandle, uris: Vec<String>) -> Result<Vec<String>, S
     Ok(out)
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())

@@ -138,7 +138,7 @@
           {#if job.state === "queued"}
             Waiting for other conversions
           {:else}
-            {remaining(job.progress?.etaSeconds)}{#if job.progress && job.progress.speed > 0} · {job.progress.speed.toFixed(1)}× speed{/if}
+            {remaining(job.progress?.etaSeconds)}{job.progress && job.progress.speed > 0 ? ` · ${job.progress.speed.toFixed(1)}× speed` : ""}
           {/if}
         </p>
       {/if}

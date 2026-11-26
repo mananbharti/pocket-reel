@@ -1,0 +1,199 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a GitHub Release (otherwise only build artifacts)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  FFMPEG_SERIES: n8.1
+
+jobs:
+  linux:
+    name: Linux (.deb, AppImage)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libsoup-3.0-dev patchelf file
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
+      - name: Bundle FFmpeg
+        run: scripts/fetch-ffmpeg.sh linux64
+      - name: Build
+        working-directory: app
+        run: |
+          npm ci
+          npx tauri build --bundles deb,appimage
+      - name: Smoke test the bundled app's engine
+        run: |
+          ./app/src-tauri/resources/ffmpeg/ffmpeg -v error -f lavfi -i testsrc2=size=320x240:duration=2 -f lavfi -i sine=d=2 -c:v libx264 -c:a aac s.mp4
+          POCKETREEL_FFMPEG=$PWD/app/src-tauri/resources/ffmpeg/ffmpeg POCKETREEL_FFPROBE=$PWD/app/src-tauri/resources/ffmpeg/ffprobe cargo run --release -p pocketreel-cli -- convert s.mp4 -p classic-avi -o out
+          dpkg-deb -c target/release/bundle/deb/*.deb | grep -E 'ffmpeg|ffprobe|pocket-reel'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
+
+  windows:
+    name: Windows (installer, MSI)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
+      - name: Bundle FFmpeg
+        shell: bash
+        run: scripts/fetch-ffmpeg.sh win64
+      - name: Build
+        working-directory: app
+        run: |
+          npm ci
+          npx tauri build --bundles nsis,msi
+      - name: Smoke test the bundled engine
+        shell: bash
+        run: |
+          F=app/src-tauri/resources/ffmpeg
+          $F/ffmpeg.exe -v error -f lavfi -i testsrc2=size=320x240:duration=2 -f lavfi -i sine=d=2 -c:v libx264 -c:a aac s.mp4
+          POCKETREEL_FFMPEG=$F/ffmpeg.exe POCKETREEL_FFPROBE=$F/ffprobe.exe cargo run --release -p pocketreel-cli -- convert s.mp4 -p classic-avi -o out
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/msi/*.msi
+
+  android:
+    name: Android (APK)
+    runs-on: ubuntu-24.04
+    env:
+      NDK_VERSION: 27.2.12479018
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: app/package-lock.json }
+      - name: Android NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION" "platforms;android-35" "build-tools;35.0.0" >/dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+      - name: Cache FFmpeg for Android
+        id: ffcache
+        uses: actions/cache@v4
+        with:
+          path: android-ffmpeg
+          key: android-ffmpeg-${{ hashFiles('scripts/build-ffmpeg-android.sh') }}-${{ env.NDK_VERSION }}
+      - name: Build FFmpeg for Android
+        if: steps.ffcache.outputs.cache-hit != 'true'
+        run: scripts/build-ffmpeg-android.sh android-ffmpeg arm64-v8a x86_64
+      - name: Generate and patch the Android project
+        working-directory: app
+        run: |
+          npm ci
+          npx tauri android init --ci
+          python3 ../scripts/patch-android.py ../android-ffmpeg
+      - name: Build APK
+        working-directory: app
+        run: npx tauri android build --apk --ci --target aarch64 --target x86_64
+      - name: Sign APK
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -e
+          apk=$(find app/src-tauri/gen/android -name '*universal*release*.apk' | head -1)
+          bt="$ANDROID_HOME/build-tools/35.0.0"
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > release.jks
+            pass="$KEYSTORE_PASSWORD"
+          else
+            echo "::warning::No ANDROID_KEYSTORE secret; signing with a one-off key."
+            pass=ephemeral-$(date +%s)
+            keytool -genkeypair -keystore release.jks -storepass "$pass" -keypass "$pass" -alias pocketreel \
+              -keyalg RSA -keysize 4096 -validity 10000 -dname "CN=Pocket Reel" >/dev/null
+          fi
+          "$bt/zipalign" -f -p 4 "$apk" aligned.apk
+          "$bt/apksigner" sign --ks release.jks --ks-pass "pass:$pass" --out PocketReel-android.apk aligned.apk
+          "$bt/apksigner" verify --print-certs PocketReel-android.apk | head -3
+          rm -f release.jks
+          unzip -l PocketReel-android.apk | grep -E 'lib/.*/lib(ffmpeg|ffprobe|pocket_reel_lib)\.so'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: PocketReel-android.apk
+
+  android-test:
+    name: Android emulator test
+    needs: android
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: android }
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Install, convert a video in the app, check the output
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          script: python3 scripts/android-smoke.py PocketReel-android.apk android-shots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-screenshots
+          path: android-shots
+
+  publish:
+    name: Publish release
+    needs: [linux, windows, android, android-test]
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.publish
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist }
+      - name: Name files by platform
+        run: |
+          mkdir release
+          cp dist/linux/deb/*.deb release/PocketReel-linux-amd64.deb
+          cp dist/linux/appimage/*.AppImage release/PocketReel-linux-x86_64.AppImage
+          cp dist/windows/nsis/*.exe release/PocketReel-windows-x64-setup.exe
+          cp dist/windows/msi/*.msi release/PocketReel-windows-x64.msi
+          cp dist/android/PocketReel-android.apk release/PocketReel-android.apk
+          (cd release && sha256sum * > SHA256SUMS.txt)
+          ls -la release
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'nightly' }}
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
