@@ -72,6 +72,9 @@ def find(pattern, timeout=40, fail=None):
                 return n
         time.sleep(1.5)
     shot("timeout")
+    for name, extra in (("logcat-timeout.txt", []), ("logcat-crash.txt", ["-b", "crash"])):
+        with open(os.path.join(outdir, name), "w") as f:
+            f.write(adb("logcat", "-d", *extra, check=False))
     texts = [n["text"].strip() for n in nodes() if n["text"].strip()]
     raise SystemExit(f"Timed out waiting for /{pattern}/. Visible: {texts[:40]}")
 
