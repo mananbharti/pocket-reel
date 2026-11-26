@@ -1,7 +1,8 @@
 //! Tauri shell: exposes the engine to the web UI on desktop and Android.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use pocketreel_engine::{
     plan, presets, preview, probe, Engine, Estimate, Event, JobRequest, JobSnapshot, MediaInfo, Plan, Preset, Settings,
@@ -10,20 +11,38 @@ use pocketreel_engine::{
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+/// Registered before the window loads; the engine is filled in by a background
+/// thread because finding and checking FFmpeg can take seconds on a phone.
 struct AppState {
-    engine: Mutex<Option<Engine>>,
-    error: Option<String>,
-    platform: &'static str,
+    engine: OnceLock<Result<Engine, String>>,
 }
 
 impl AppState {
     fn engine(&self) -> Result<Engine, String> {
-        self.engine
-            .lock()
-            .unwrap()
-            .clone()
-            .ok_or_else(|| self.error.clone().unwrap_or_else(|| "FFmpeg is not available.".into()))
+        match self.engine.get() {
+            Some(Ok(e)) => Ok(e.clone()),
+            Some(Err(e)) => Err(e.clone()),
+            None => Err("Pocket Reel is still starting. Try again in a moment.".into()),
+        }
     }
+
+    /// Wait (up to a minute) for startup to finish.
+    fn wait(&self) -> Result<Engine, String> {
+        for _ in 0..1200 {
+            if self.engine.get().is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        self.engine()
+    }
+}
+
+async fn ready_engine(app: &AppHandle) -> Result<Engine, String> {
+    let h = app.clone();
+    tauri::async_runtime::spawn_blocking(move || h.state::<AppState>().wait())
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[derive(Serialize)]
@@ -81,20 +100,20 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Sen
 }
 
 #[tauri::command]
-fn app_info(app: AppHandle, state: State<AppState>) -> AppInfo {
-    let engine = state.engine.lock().unwrap().clone();
-    AppInfo {
-        platform: state.platform,
+async fn app_info(app: AppHandle) -> Result<AppInfo, String> {
+    let engine = ready_engine(&app).await;
+    Ok(AppInfo {
+        platform: platform(),
         ffmpeg: engine.as_ref().map(|e| e.tools().version.clone()).unwrap_or_default(),
         default_output_dir: android_output_dir(false).map(|p| p.to_string_lossy().to_string()),
         version: app.package_info().version.to_string(),
-        engine_error: state.error.clone(),
-    }
+        engine_error: engine.err(),
+    })
 }
 
 #[tauri::command]
-fn presets(state: State<AppState>) -> Result<Vec<Preset>, String> {
-    Ok(presets::catalog_for(state.engine()?.tools()))
+async fn presets(app: AppHandle) -> Result<Vec<Preset>, String> {
+    Ok(presets::catalog_for(ready_engine(&app).await?.tools()))
 }
 
 #[tauri::command]
@@ -271,25 +290,27 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
+        .manage(AppState { engine: OnceLock::new() })
         .setup(|app| {
             let handle = app.handle().clone();
-            let (engine, error) = match Tools::locate(&tool_dirs(&handle)) {
-                Ok(tools) => {
-                    let emitter = handle.clone();
-                    let engine = Engine::new(tools, move |ev: Event| {
-                        let _ = emitter.emit("engine-event", ev);
-                    });
-                    (Some(engine), None)
-                }
-                Err(e) => (None, Some(e.to_string())),
-            };
-            app.manage(AppState { engine: Mutex::new(engine), error, platform: platform() });
+            std::thread::spawn(move || {
+                let result = match Tools::locate(&tool_dirs(&handle)) {
+                    Ok(tools) => {
+                        let emitter = handle.clone();
+                        Ok(Engine::new(tools, move |ev: Event| {
+                            let _ = emitter.emit("engine-event", ev);
+                        }))
+                    }
+                    Err(e) => Err(e.to_string()),
+                };
+                let _ = handle.state::<AppState>().engine.set(result);
+            });
             Ok(())
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 if let Some(s) = window.app_handle().try_state::<AppState>() {
-                    if let Some(e) = s.engine.lock().unwrap().as_ref() {
+                    if let Some(Ok(e)) = s.engine.get() {
                         e.shutdown();
                     }
                 }

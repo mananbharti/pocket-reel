@@ -40,7 +40,8 @@
     </main>
   {:else if !app.ready}
     <main class="center" aria-busy="true">
-      <span class="spin" aria-label="Loading"></span>
+      <span class="spin" aria-hidden="true"></span>
+      <p class="ready">Getting ready…</p>
     </main>
   {:else}
     <main class="content">
@@ -104,6 +105,10 @@
   .center p {
     max-width: 420px;
     margin: 0;
+  }
+  .ready {
+    margin-top: 14px;
+    font-size: 15px;
   }
   .spin {
     width: 26px;

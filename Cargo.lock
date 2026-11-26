@@ -2837,7 +2837,7 @@ dependencies = [
 
 [[package]]
 name = "pocket-reel"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "pocketreel-engine",
  "serde",
@@ -2851,7 +2851,7 @@ dependencies = [
 
 [[package]]
 name = "pocketreel-cli"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -2862,7 +2862,7 @@ dependencies = [
 
 [[package]]
 name = "pocketreel-engine"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "base64 0.22.1",
  "serde",
