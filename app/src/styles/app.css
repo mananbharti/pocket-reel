@@ -518,5 +518,5 @@ button {
 /* Android draws the app edge to edge: keep clear of the status and gesture bars. */
 :root.mobile-app {
   --status-top: 28px;
-  --nav-bottom: 16px;
+  --nav-bottom: 48px; /* room for the 3-button navigation bar */
 }

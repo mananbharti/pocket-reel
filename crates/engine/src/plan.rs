@@ -505,10 +505,14 @@ pub fn output_path(input: &Path, out_dir: Option<&Path>, extension: &str, overwr
     candidate
 }
 
-/// Hidden temporary sibling used while a conversion runs.
+/// Hidden temporary sibling used while a conversion runs. It keeps the real
+/// extension because Android only allows media file types in Movies/ and Music/.
 pub fn partial_path(output: &Path) -> PathBuf {
-    let name = output.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    output.with_file_name(format!(".{name}.part"))
+    let stem = output.file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    match output.extension() {
+        Some(ext) => output.with_file_name(format!(".{stem}.partial.{}", ext.to_string_lossy())),
+        None => output.with_file_name(format!(".{stem}.partial")),
+    }
 }
 
 #[cfg(test)]
@@ -537,6 +541,6 @@ mod tests {
         assert_eq!(p, PathBuf::from("/tmp/a/movie (converted).avi"));
         let p = output_path(Path::new("/nonexistent/x/movie.mp4"), None, "avi", false);
         assert_eq!(p, PathBuf::from("/nonexistent/x/movie.avi"));
-        assert_eq!(partial_path(Path::new("/x/movie.avi")), PathBuf::from("/x/.movie.avi.part"));
+        assert_eq!(partial_path(Path::new("/x/movie.avi")), PathBuf::from("/x/.movie.partial.avi"));
     }
 }

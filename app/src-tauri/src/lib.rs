@@ -175,7 +175,8 @@ fn android_output_dir(audio: bool) -> Option<PathBuf> {
     ];
     candidates.into_iter().find(|dir| {
         std::fs::create_dir_all(dir).is_ok() && {
-            let probe = dir.join(".pocketreel-write-test");
+            // Use a media extension: Android rejects other file types in Movies/ and Music/.
+            let probe = dir.join(if audio { ".pocketreel-write-test.mp3" } else { ".pocketreel-write-test.avi" });
             let ok = std::fs::write(&probe, b"ok").is_ok();
             let _ = std::fs::remove_file(&probe);
             ok
