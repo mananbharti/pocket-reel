@@ -73,7 +73,7 @@
       <span class="lbl">Player screen</span>
       <select value={app.prefs.screen} onchange={(e) => app.setScreen(e.currentTarget.value)}>
         {#each CLASSIC_SCREENS as s (s)}
-          <option value={s}>{s.replace("x", " × ")}{s === "160x120" ? " (most players)" : ""}</option>
+          <option value={s}>{s.replace("x", " × ")}{s === "160x120" && !narrow ? " (most players)" : ""}</option>
         {/each}
       </select>
     </label>
