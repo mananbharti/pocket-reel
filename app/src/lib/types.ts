@@ -224,3 +224,26 @@ export interface AppInfo {
   /** Pasting and sharing video links works. */
   downloads?: boolean;
 }
+
+export interface UpdateInfo {
+  version: string;
+  package: "android" | "windowsSetup" | "windowsMsi" | "macDmg" | "appImage" | "deb";
+  asset: string;
+  url: string;
+  size: number;
+  sumsUrl: string | null;
+  page: string;
+}
+
+export interface UpdateProgress {
+  downloaded: number;
+  total: number | null;
+  stage: "download" | "verify" | "install";
+}
+
+export interface InstallOutcome {
+  /** "restarting": the app closes and reopens; "installer": the system
+   *  installer is showing (Android); "manual": finish by hand (macOS fallback). */
+  outcome: "restarting" | "installer" | "manual";
+  needsPermission: boolean;
+}

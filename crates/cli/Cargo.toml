@@ -13,7 +13,7 @@ name = "pocketreel"
 path = "src/main.rs"
 
 [dependencies]
-pocketreel-engine = { path = "../engine" }
+pocketreel-engine = { path = "../engine", features = ["http"] }
 serde.workspace = true
 serde_json.workspace = true
 clap = { version = "4", features = ["derive"] }

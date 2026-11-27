@@ -14,6 +14,8 @@ use pocketreel_engine::{
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+mod updater;
+
 /// Registered before the window loads; the engine is filled in by a background
 /// thread because finding and checking FFmpeg can take seconds on a phone.
 struct AppState {
@@ -538,12 +540,14 @@ mod mobile {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    updater::remember_exe();
     tauri::Builder::default()
         .plugin(ytdl_plugin())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .manage(AppState { engine: OnceLock::new() })
+        .manage(updater::UpdateState::default())
         .setup(|app| {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
@@ -573,6 +577,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            updater::check_update,
+            updater::install_update,
+            updater::open_release_page,
             app_info,
             presets,
             probe,

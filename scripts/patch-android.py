@@ -3,6 +3,7 @@
 
 * Add the YtdlPlugin (downloads with youtubedl-android) and its dependency.
 * Register as a share target so links can be shared to the app.
+* Let the app hand a downloaded update (APK) to the system installer.
 
 * Extract native libraries at install time so the bundled FFmpeg executables
   (packed as lib*.so) live in nativeLibraryDir, where Android allows exec.
@@ -78,6 +79,28 @@ if "launchMode" not in m:
     m = m.replace("<activity", '<activity\n            android:launchMode="singleTask"', 1)
 if "android.permission.INTERNET" not in m:
     m = m.replace("<application", '<uses-permission android:name="android.permission.INTERNET" />\n    <application', 1)
+if "REQUEST_INSTALL_PACKAGES" not in m:
+    m = m.replace("<application", '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n    <application', 1)
+if "UpdateFileProvider" not in m:
+    provider = """
+        <provider
+            android:name="app.pocketreel.converter.UpdateFileProvider"
+            android:authorities="${applicationId}.updates"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/update_paths" />
+        </provider>
+    </application>"""
+    m = m.replace("</application>", provider, 1)
+xml = gen / "app" / "src" / "main" / "res" / "xml" / "update_paths.xml"
+xml.parent.mkdir(parents=True, exist_ok=True)
+xml.write_text("""<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <cache-path name="updates" path="updates/" />
+</paths>
+""")
 if "extractNativeLibs" not in m:
     m = m.replace("<application", '<application\n        android:extractNativeLibs="true"', 1)
 manifest.write_text(m)

@@ -20,6 +20,7 @@ pub mod progress;
 pub mod queue;
 pub mod run;
 pub mod tools;
+pub mod update;
 
 pub use download::{Downloader, RemoteInfo, YtDlp};
 pub use error::{Error, Result};

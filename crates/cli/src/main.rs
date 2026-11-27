@@ -10,7 +10,7 @@ use std::sync::mpsc;
 use clap::{Parser, Subcommand, ValueEnum};
 use pocketreel_engine::download::{extract_url, Downloader};
 use pocketreel_engine::{
-    format_bytes, plan, presets, preview, Engine, Event, Fit, JobRequest, JobState, Settings, Tools, YtDlp,
+    format_bytes, plan, presets, preview, CancelToken, Engine, Event, Fit, JobRequest, JobState, Settings, Tools, YtDlp,
 };
 
 #[derive(Parser)]
@@ -143,6 +143,15 @@ enum Cmd {
         #[arg(short, long, default_value_t = 360)]
         quality: u32,
     },
+    /// Check GitHub for a newer Pocket Reel and optionally download it.
+    CheckUpdate {
+        /// Pretend to be this version (for testing).
+        #[arg(long, default_value = env!("CARGO_PKG_VERSION"))]
+        current: String,
+        /// Download and verify the update into this folder.
+        #[arg(long)]
+        download: Option<PathBuf>,
+    },
     /// Serve the engine over HTTP for UI development.
     Serve {
         #[arg(long, default_value_t = 7878)]
@@ -240,6 +249,32 @@ fn run() -> Result<(), String> {
             let y = YtDlp::locate(&[], &t.ffmpeg).ok_or("yt-dlp was not found")?;
             let i = y.info(&url).map_err(|e| e.to_string())?;
             println!("{}\n  {}  {}", i.title, fmt_time(i.duration.unwrap_or(0.0)), i.uploader.unwrap_or_default());
+        }
+        Cmd::CheckUpdate { current, download } => {
+            use pocketreel_engine::update;
+            let package = update::Package::current().ok_or("Updates aren't available for this platform")?;
+            let json = update::http::get_text(update::LATEST_RELEASE_URL).map_err(|e| e.to_string())?;
+            let Some(u) = update::from_release(&json, &current, package).map_err(|e| e.to_string())? else {
+                println!("Pocket Reel {current} is up to date.");
+                return Ok(());
+            };
+            println!("Update available: {} ({}, {})", u.version, u.asset, format_bytes(u.size));
+            if let Some(dir) = download {
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                let dest = dir.join(&u.asset);
+                let mut last = 0u64;
+                update::http::download(&u.url, &dest, &CancelToken::new(), &mut |done, total| {
+                    if done - last > 5_000_000 || Some(done) == total {
+                        last = done;
+                        eprintln!("  {} of {}", format_bytes(done), total.map(format_bytes).unwrap_or_else(|| "?".into()));
+                    }
+                })
+                .map_err(|e| e.to_string())?;
+                let sums_url = u.sums_url.as_deref().ok_or("The release has no SHA256SUMS.txt")?;
+                let sums = update::http::get_text(sums_url).map_err(|e| e.to_string())?;
+                update::verify(&dest, &u.asset, &sums).map_err(|e| e.to_string())?;
+                println!("Downloaded and verified {}", dest.display());
+            }
         }
         Cmd::Convert { files, opts, out, overwrite, jobs, quality } => {
             let t = tools()?;

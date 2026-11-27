@@ -8,6 +8,7 @@
   import Header from "./components/Header.svelte";
   import Icon from "./components/Icon.svelte";
   import Toasts from "./components/Toasts.svelte";
+  import UpdateBanner from "./components/UpdateBanner.svelte";
 
   onMount(() => {
     app.init().then(() => {
@@ -57,6 +58,7 @@
   {:else}
     <main class="content">
       <div class="column">
+        <UpdateBanner />
         {#if app.items.length === 0}
           <DropZone />
         {:else}

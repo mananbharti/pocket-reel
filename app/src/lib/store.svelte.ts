@@ -1,3 +1,4 @@
+import { updates } from "./updates.svelte";
 import { ApiError, createApi, type Api } from "./api";
 import { basename, bytes, bytesSpoken } from "./format";
 import type {
@@ -211,6 +212,7 @@ export class AppState {
       this.api.setConcurrency(this.prefs.concurrency);
       this.ready = true;
       if (info.downloads) this.watchShares();
+      updates.start(this.api);
     } catch (e) {
       this.fatal = e instanceof Error ? e.message : String(e);
     }

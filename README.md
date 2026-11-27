@@ -44,7 +44,9 @@ Most players have a 160 × 120 screen, which is the default. If yours is differe
 | **macOS 11+** (Apple silicon) | [`PocketReel-macos-arm64.dmg`](https://github.com/mananbharti/pocket-reel/releases/latest/download/PocketReel-macos-arm64.dmg). Open it and drag Pocket Reel to Applications. |
 | **Android 8+** | [`PocketReel-android.apk`](https://github.com/mananbharti/pocket-reel/releases/latest/download/PocketReel-android.apk). Converted videos are saved to *Movies › Pocket Reel*. |
 
-Everything is built in. Nothing to install and no account. Your own videos never leave your device; the internet is only used when you add a link.
+Everything is built in. Nothing to install and no account. Your own videos never leave your device; the internet is only used when you add a link and to check for updates.
+
+**Updates:** when a new version is out, Pocket Reel shows an *Update* button. It downloads the new version, checks it against the release's `SHA256SUMS.txt`, and installs it (on Android, tap *Install* when asked). Phones with 1.2.1 or older need to uninstall the app once and install the new APK, because older APKs were signed with a different key.
 
 > [!IMPORTANT]
 > Only download videos you have the right to keep, such as your own, ones with a free licence, or ones the site lets you download. Respect each site's terms.

@@ -6,6 +6,7 @@ import type {
   EngineEvent,
   Estimate,
   Image,
+  InstallOutcome,
   JobRequest,
   JobSnapshot,
   MediaInfo,
@@ -13,6 +14,8 @@ import type {
   Preset,
   RemoteInfo,
   Settings,
+  UpdateInfo,
+  UpdateProgress,
 } from "./types";
 
 export const MEDIA_EXTENSIONS = [
@@ -49,6 +52,12 @@ export interface Api {
   reveal(path: string): Promise<void>;
   open(path: string): Promise<void>;
   onDrop(handlers: DropHandlers): () => void;
+  /** A newer release for this platform, or null when up to date. */
+  checkUpdate(): Promise<UpdateInfo | null>;
+  /** Download, verify and install the update found by checkUpdate. */
+  installUpdate(): Promise<InstallOutcome>;
+  onUpdateProgress(cb: (p: UpdateProgress) => void): () => void;
+  openReleasePage(): Promise<void>;
   /** Where outputs end up when no folder is chosen (shown in the UI). */
   readonly supportsFolders: boolean;
 }
@@ -103,6 +112,21 @@ async function tauriApi(): Promise<Api> {
     setConcurrency: (n) => call("set_concurrency", { n }),
     linkInfo: (url) => call("link_info", { url }),
     takeShared: () => call<string | null>("take_shared_url"),
+    checkUpdate: () => call<UpdateInfo | null>("check_update"),
+    installUpdate: () => call<InstallOutcome>("install_update"),
+    openReleasePage: () => call("open_release_page"),
+    onUpdateProgress(cb) {
+      let un: (() => void) | null = null;
+      let disposed = false;
+      event.listen<UpdateProgress>("update-progress", (e) => cb(e.payload)).then((u) => {
+        if (disposed) u();
+        else un = u;
+      });
+      return () => {
+        disposed = true;
+        un?.();
+      };
+    },
     onEvent(cb) {
       let un: (() => void) | null = null;
       let disposed = false;
@@ -192,6 +216,8 @@ function httpApi(): Api {
     return out;
   };
   const accept = MEDIA_EXTENSIONS.map((e) => "." + e).join(",");
+  const fakeUpdate = new URLSearchParams(location.search).get("fakeUpdate");
+  const updateListeners = new Set<(p: UpdateProgress) => void>();
 
   return {
     supportsFolders: false,
@@ -216,6 +242,38 @@ function httpApi(): Api {
     setConcurrency: async () => {},
     linkInfo: (url) => post("/api/link-info", { url }),
     takeShared: async () => null,
+    // Browser development: "?fakeUpdate" shows the update banner with a
+    // simulated download ("?fakeUpdate=fail" ends in an error).
+    checkUpdate: async () =>
+      fakeUpdate == null
+        ? null
+        : {
+            version: "9.9.9",
+            package: "appImage",
+            asset: "PocketReel-linux-x86_64.AppImage",
+            url: "",
+            size: 180_000_000,
+            sumsUrl: null,
+            page: "",
+          },
+    installUpdate: async () => {
+      if (fakeUpdate == null) throw new ApiError("Updates aren't available here.");
+      for (let done = 0; done <= 180_000_000; done += 9_000_000) {
+        updateListeners.forEach((cb) => cb({ downloaded: done, total: 180_000_000, stage: "download" }));
+        await new Promise((r) => setTimeout(r, 120));
+      }
+      updateListeners.forEach((cb) => cb({ downloaded: 0, total: null, stage: "verify" }));
+      await new Promise((r) => setTimeout(r, 900));
+      if (fakeUpdate === "fail") throw new ApiError("The update didn't download correctly (checksum mismatch). Try again.");
+      return { outcome: "installer", needsPermission: true };
+    },
+    onUpdateProgress: (cb) => {
+      updateListeners.add(cb);
+      return () => updateListeners.delete(cb);
+    },
+    openReleasePage: async () => {
+      window.open("https://github.com/mananbharti/pocket-reel/releases/latest", "_blank");
+    },
     onEvent(cb) {
       const es = new EventSource("/api/events");
       es.onmessage = (m) => cb(JSON.parse(m.data));
