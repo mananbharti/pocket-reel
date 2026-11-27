@@ -11,6 +11,7 @@ abis=("${@:-arm64-v8a}")
 api="${ANDROID_API:-26}"
 ffmpeg_ver="${FFMPEG_VERSION:-8.0}"
 lame_ver="3.100"
+zlib_ver="1.3.1"
 ndk="${ANDROID_NDK_HOME:?set ANDROID_NDK_HOME}"
 tc="$ndk/toolchains/llvm/prebuilt/linux-x86_64"
 src="${SRC_DIR:-$PWD/.android-ffmpeg-src}"
@@ -23,6 +24,7 @@ fetch() { # url file
 fetch "https://ffmpeg.org/releases/ffmpeg-${ffmpeg_ver}.tar.xz" "ffmpeg.tar.xz"
 fetch "https://downloads.sourceforge.net/project/lame/lame/${lame_ver}/lame-${lame_ver}.tar.gz" "lame.tar.gz"
 fetch "https://code.videolan.org/videolan/x264/-/archive/stable/x264-stable.tar.bz2" "x264.tar.bz2"
+fetch "https://github.com/madler/zlib/releases/download/v${zlib_ver}/zlib-${zlib_ver}.tar.gz" "zlib.tar.gz"
 
 for abi in "${abis[@]}"; do
   case "$abi" in
@@ -36,6 +38,15 @@ for abi in "${abis[@]}"; do
   export CC="$tc/bin/${triple}${api}-clang" CXX="$tc/bin/${triple}${api}-clang++"
   export AR="$tc/bin/llvm-ar" RANLIB="$tc/bin/llvm-ranlib" NM="$tc/bin/llvm-nm" STRIP="$tc/bin/llvm-strip"
   export CFLAGS="-O3 -fPIC" LDFLAGS="-Wl,-z,max-page-size=16384"
+
+  # zlib is linked in, so FFmpeg needs only libc/libm/libdl at run time. yt-dlp
+  # runs it with LD_LIBRARY_PATH pointing at its own Python libraries, which
+  # must not be able to replace any library FFmpeg loads.
+  echo "== zlib ($abi)"
+  tar -xzf "$src/zlib.tar.gz" -C "$build"
+  (cd "$build/zlib-${zlib_ver}" &&
+    CHOST="$triple" ./configure --prefix="$prefix" --static >/dev/null &&
+    make -j"$jobs" libz.a >/dev/null && make install >/dev/null)
 
   echo "== LAME ($abi)"
   tar -xzf "$src/lame.tar.gz" -C "$build"
@@ -62,6 +73,7 @@ for abi in "${abis[@]}"; do
       --sysroot="$tc/sysroot" --pkg-config=pkg-config --pkg-config-flags=--static \
       --enable-pic --enable-static --disable-shared --disable-debug --disable-doc --disable-ffplay \
       --disable-network --disable-autodetect --enable-zlib \
+      --disable-mediacodec --disable-jni --disable-indev=android_camera \
       --enable-gpl --enable-version3 --enable-libmp3lame --enable-libx264 \
       --extra-cflags="-I$prefix/include -O3" --extra-ldflags="-L$prefix/lib -Wl,-z,max-page-size=16384" \
       --extra-libs="-lm" "${asm[@]}" >/dev/null &&
@@ -71,5 +83,9 @@ for abi in "${abis[@]}"; do
   cp "$prefix/bin/ffmpeg" "$out/$abi/libffmpeg.so"
   cp "$prefix/bin/ffprobe" "$out/$abi/libffprobe.so"
   "$STRIP" "$out/$abi/libffmpeg.so" "$out/$abi/libffprobe.so"
+  # Only Android's core libraries may be needed (see the zlib note above).
+  if "$tc/bin/llvm-readelf" -d "$out/$abi/libffmpeg.so" | grep NEEDED | grep -vE '\[lib(c|m|dl|log|android)\.so\]'; then
+    echo "libffmpeg.so needs extra shared libraries" >&2; exit 1
+  fi
   ls -la "$out/$abi"
 done
