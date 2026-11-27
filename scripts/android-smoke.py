@@ -179,49 +179,63 @@ def check_avi(path):
     assert "mjpeg,160,120" in probe and "adpcm_ima_wav,22050,1" in probe, probe
 
 
-print("Sharing a video link to the app")
+print("Sharing video links to the app")
 os.makedirs("web", exist_ok=True)
 os.replace("sample.mp4", "web/clip.mp4")
+# YouTube sends picture and sound as separate streams that yt-dlp must join
+# with FFmpeg; a DASH stream of the same clip does the same.
+subprocess.run(
+    ["ffmpeg", "-v", "error", "-y", "-i", "web/clip.mp4", "-map", "0:v", "-map", "0:a", "-c", "copy",
+     "-f", "dash", "-adaptation_sets", "id=0,streams=v id=1,streams=a", "web/split.mpd"], check=True)
 handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory="web")
 server = http.server.ThreadingHTTPServer(("0.0.0.0", 8765), handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
-# 10.0.2.2 is the host as seen from the emulator.
-adb("shell", "am", "start", "-a", "android.intent.action.SEND", "-t", "text/plain",
-    "--es", "android.intent.extra.TEXT", "'Look at this http://10.0.2.2:8765/clip.mp4'", "-n",
-    f"{PKG}/.MainActivity")
-time.sleep(5)
-shot("05-shared")
-deadline = time.time() + 300
-linked = None
-failure = None
-while time.time() < deadline and not linked and not failure:
-    for base in bases:
-        for line in adb("shell", "ls", "-1", f"'{base}'", check=False).splitlines():
-            if line.strip() == "clip.avi":
-                linked = base + "clip.avi"
+
+
+def share_link(path, name, step):
+    """Share http://host/<path> to the app and wait for <name>.avi."""
+    # 10.0.2.2 is the host as seen from the emulator.
+    adb("shell", "am", "start", "-a", "android.intent.action.SEND", "-t", "text/plain",
+        "--es", "android.intent.extra.TEXT", f"'Look at this http://10.0.2.2:8765/{path}'", "-n",
+        f"{PKG}/.MainActivity")
+    time.sleep(5)
+    shot(f"{step}-shared-{name}")
+    deadline = time.time() + 300
+    linked = None
+    failure = None
+    while time.time() < deadline and not linked and not failure:
+        for base in bases:
+            for line in adb("shell", "ls", "-1", f"'{base}'", check=False).splitlines():
+                if line.strip() == f"{name}.avi":
+                    linked = base + f"{name}.avi"
+        if not linked:
+            texts = [n["text"].strip() for n in nodes() if n["text"].strip()]
+            # The row for the link shows its error under the link's address.
+            for i, t in enumerate(texts):
+                if t.startswith(f"http://10.0.2.2:8765/{path}") and i + 1 < len(texts):
+                    nxt = texts[i + 1]
+                    if re.search(r"couldn.t|can.t|fail|isn.t|error|unable|not found|stopped", nxt, re.I):
+                        failure = nxt
+            time.sleep(3)
+    time.sleep(2)
+    shot(f"{step}-link-{name}-" + ("converted" if linked else "failed"))
+    with open(os.path.join(outdir, f"logcat-share-{name}.txt"), "w") as f:
+        f.write(adb("logcat", "-d", "-t", "4000", check=False))
+    with open(os.path.join(outdir, "logcat-app.txt"), "w") as f:
+        pid = adb("shell", "pidof", PKG, check=False).strip()
+        f.write(adb("logcat", "-d", "-s", "PocketReel:V", "Tauri:V", "RustStdoutStderr:V", "AndroidRuntime:E", check=False))
+        if pid:
+            f.write("\n---- app process ----\n" + adb("logcat", "-d", f"--pid={pid}", check=False))
     if not linked:
         texts = [n["text"].strip() for n in nodes() if n["text"].strip()]
-        # The row for the link shows its error under the link's address.
-        for i, t in enumerate(texts):
-            if t.startswith("http://10.0.2.2") and i + 1 < len(texts):
-                nxt = texts[i + 1]
-                if re.search(r"couldn.t|can.t|fail|isn.t|error|unable|not found|stopped", nxt, re.I):
-                    failure = nxt
-        time.sleep(3)
-time.sleep(2)
-shot("06-link-converted" if linked else "06-link-failed")
-with open(os.path.join(outdir, "logcat-share.txt"), "w") as f:
-    f.write(adb("logcat", "-d", "-t", "4000", check=False))
-with open(os.path.join(outdir, "logcat-app.txt"), "w") as f:
-    pid = adb("shell", "pidof", PKG, check=False).strip()
-    f.write(adb("logcat", "-d", "-s", "PocketReel:V", "Tauri:V", "RustStdoutStderr:V", "AndroidRuntime:E", check=False))
-    if pid:
-        f.write("\n---- app process ----\n" + adb("logcat", "-d", f"--pid={pid}", check=False))
+        print(open(os.path.join(outdir, "logcat-app.txt")).read()[-4000:])
+        server.shutdown()
+        raise SystemExit(f"The shared link {path} was not converted ({failure or 'timed out'}). Visible: {texts[:40]}")
+    adb("pull", linked, f"{name}.avi")
+    check_avi(f"{name}.avi")
+    print(f"OK: shared link {path} converted to {linked}")
+
+
+share_link("clip.mp4", "clip", "05")
+share_link("split.mpd", "split", "06")
 server.shutdown()
-if not linked:
-    texts = [n["text"].strip() for n in nodes() if n["text"].strip()]
-    print(open(os.path.join(outdir, "logcat-app.txt")).read()[-4000:])
-    raise SystemExit(f"The shared link was not converted ({failure or 'timed out'}). Visible: {texts[:40]}")
-adb("pull", linked, "linked.avi")
-check_avi("linked.avi")
-print(f"OK: shared link converted to {linked}")

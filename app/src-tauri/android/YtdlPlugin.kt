@@ -32,6 +32,7 @@ class DownloadArgs {
     lateinit var dir: String
     lateinit var id: String
     var format: String? = null
+    var ffmpeg: String? = null
 }
 
 @InvokeArg
@@ -118,6 +119,8 @@ class YtdlPlugin(private val activity: Activity) : Plugin(activity) {
                 request.addOption("--no-playlist")
                 request.addOption("-f", args.format ?: FORMAT)
                 request.addOption("--merge-output-format", "mp4")
+                // Without FFmpeg yt-dlp leaves separate picture and sound files.
+                args.ffmpeg?.takeIf { File(it).isFile }?.let { request.addOption("--ffmpeg-location", it) }
                 request.addOption("--no-mtime")
                 request.addOption("-o", File(dir, "%(id)s.%(ext)s").absolutePath)
                 request.addOption("--print", "after_move:FILE %(filepath)s")
@@ -127,8 +130,16 @@ class YtdlPlugin(private val activity: Activity) : Plugin(activity) {
                 val response = YoutubeDL.getInstance().execute(request, args.id) { p, eta, line ->
                     progress[args.id] = Triple(p, eta, line)
                 }
-                val path = response.out.lines().lastOrNull { it.startsWith("FILE ") }?.removePrefix("FILE ")?.trim()
-                    ?: dir.listFiles()?.filter { it.isFile }?.maxByOrNull { it.lastModified() }?.absolutePath
+                val printed = response.out.lines().lastOrNull { it.startsWith("FILE ") }?.removePrefix("FILE ")?.trim()
+                val files = dir.listFiles()?.filter { it.isFile && !it.name.endsWith(".part") }.orEmpty()
+                // Several files left over means picture and sound weren't joined;
+                // converting just one of them would lose the sound.
+                if (printed?.let { File(it).isFile } != true && files.size > 1) {
+                    Log.e(TAG, "yt-dlp left ${files.map { it.name }} unmerged. stderr: ${response.err}")
+                    invoke.reject("Couldn't join this video's picture and sound")
+                    return@Thread
+                }
+                val path = printed?.takeIf { File(it).isFile } ?: files.firstOrNull()?.absolutePath
                 val r = JSObject()
                 r.put("path", path)
                 invoke.resolve(r)

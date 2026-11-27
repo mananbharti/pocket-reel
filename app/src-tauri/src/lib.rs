@@ -335,12 +335,12 @@ fn setup_downloads(app: &AppHandle, engine: &Engine, ffmpeg: &Path) {
     let _ = std::fs::remove_dir_all(&work); // leftovers from an interrupted run
     #[cfg(target_os = "android")]
     {
-        let _ = ffmpeg;
         if let Some(h) = app.try_state::<mobile::YtdlHandle>() {
             let out = android_output_dir(false)
                 .or_else(|| app.path().app_data_dir().ok().map(|d| d.join("Converted")))
                 .unwrap_or_else(|| work.join("out"));
-            let downloader = mobile::MobileYtdl { handle: h.0.clone() };
+            // yt-dlp needs FFmpeg to join YouTube's separate picture and sound streams.
+            let downloader = mobile::MobileYtdl { handle: h.0.clone(), ffmpeg: ffmpeg.to_path_buf() };
             downloader.update_daily(&app.path().app_data_dir().unwrap_or_else(|_| work.clone()));
             engine.set_downloader(Arc::new(downloader), work, out);
         }
@@ -416,6 +416,8 @@ mod mobile {
 
     pub struct MobileYtdl {
         pub handle: PluginHandle<tauri::Wry>,
+        /// The bundled ffmpeg (libffmpeg.so), handed to yt-dlp for merging.
+        pub ffmpeg: PathBuf,
     }
 
     fn err(e: impl std::fmt::Display) -> Error {
@@ -467,7 +469,13 @@ mod mobile {
             );
             let (tx, rx) = mpsc::channel();
             let h = self.handle.clone();
-            let args = json!({ "url": url, "dir": dir.to_string_lossy(), "id": id, "format": format_for(max_height) });
+            let args = json!({
+                "url": url,
+                "dir": dir.to_string_lossy(),
+                "id": id,
+                "format": format_for(max_height),
+                "ffmpeg": self.ffmpeg.to_string_lossy(),
+            });
             std::thread::spawn(move || {
                 let _ = tx.send(h.run_mobile_plugin::<PathResp>("download", args));
             });
