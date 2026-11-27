@@ -155,6 +155,7 @@ class YtdlPlugin(private val activity: Activity) : Plugin(activity) {
                 // converting just one of them would lose the sound.
                 if (printed?.let { File(it).isFile } != true && files.size > 1) {
                     Log.e(TAG, "yt-dlp left ${files.map { it.name }} unmerged. stderr: ${response.err}")
+                    diagnoseFfmpeg()
                     invoke.reject("Couldn't join this video's picture and sound")
                     return@Thread
                 }
@@ -166,6 +167,7 @@ class YtdlPlugin(private val activity: Activity) : Plugin(activity) {
                 invoke.reject("Canceled")
             } catch (e: Throwable) {
                 Log.e(TAG, "download failed for ${args.url}", e)
+                diagnoseFfmpeg()
                 invoke.reject(describe(e, "The download failed"))
             } finally {
                 progress.remove(args.id)
@@ -312,6 +314,40 @@ class YtdlPlugin(private val activity: Activity) : Plugin(activity) {
         } catch (e: Throwable) {
             Log.e(TAG, "install failed for $path", e)
             invoke.reject(describe(e, "Couldn't open the installer"))
+        }
+    }
+
+    /** Logs whether yt-dlp can run the bundled FFmpeg (it joins picture and sound). */
+    private fun diagnoseFfmpeg() {
+        try {
+            val ctx = activity.applicationContext
+            val ff = File(ctx.applicationInfo.nativeLibraryDir, "libffmpeg.so")
+            val lib = File(ctx.noBackupFilesDir, "youtubedl-android/packages")
+            fun run(env: Map<String, String>): String = try {
+                val pb = ProcessBuilder(ff.absolutePath, "-hide_banner", "-bsfs").redirectErrorStream(true)
+                pb.environment().putAll(env)
+                val proc = pb.start()
+                proc.outputStream.close()
+                val out = proc.inputStream.bufferedReader().readText()
+                "exit=${proc.waitFor()} out=${out.take(300).replace('\n', ' ')}"
+            } catch (t: Throwable) {
+                "failed: $t"
+            }
+            val ld = listOf("python", "ffmpeg", "aria2c").joinToString(":") { "$lib/$it/usr/lib" }
+            Log.w(TAG, "ffmpeg check: exists=${ff.exists()} canExecute=${ff.canExecute()} size=${ff.length()}")
+            Log.w(TAG, "ffmpeg plain: ${run(emptyMap())}")
+            Log.w(TAG, "ffmpeg ytdl-env: ${run(mapOf("LD_LIBRARY_PATH" to ld))}")
+            val request = YoutubeDLRequest(emptyList())
+            request.addOption("--verbose")
+            request.addOption("--no-update")
+            try {
+                YoutubeDL.getInstance().execute(request)
+            } catch (t: Throwable) {
+                val debug = (t.message ?: "").lines().filter { "exe versions" in it || "Python" in it || "ffmpeg" in it.lowercase() }
+                Log.w(TAG, "yt-dlp view: ${debug.joinToString(" | ")}")
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "ffmpeg check failed", t)
         }
     }
 
