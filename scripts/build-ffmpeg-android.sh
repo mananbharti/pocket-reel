@@ -83,8 +83,9 @@ for abi in "${abis[@]}"; do
   cp "$prefix/bin/ffmpeg" "$out/$abi/libffmpeg.so"
   cp "$prefix/bin/ffprobe" "$out/$abi/libffprobe.so"
   "$STRIP" "$out/$abi/libffmpeg.so" "$out/$abi/libffprobe.so"
-  # Only Android's core libraries may be needed (see the zlib note above).
-  if "$tc/bin/llvm-readelf" -d "$out/$abi/libffmpeg.so" | grep NEEDED | grep -vE '\[lib(c|m|dl|log|android)\.so\]'; then
+  # Only libc/libm/libdl: system libraries like libandroid pull in liblzma,
+  # which yt-dlp's Python folder replaces with an incompatible copy.
+  if "$tc/bin/llvm-readelf" -d "$out/$abi/libffmpeg.so" | grep NEEDED | grep -vE '\[lib(c|m|dl)\.so\]'; then
     echo "libffmpeg.so needs extra shared libraries" >&2; exit 1
   fi
   ls -la "$out/$abi"
