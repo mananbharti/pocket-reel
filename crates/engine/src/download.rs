@@ -26,10 +26,18 @@ pub const DEFAULT_MAX_HEIGHT: u32 = 360;
 /// yt-dlp format selection for a download no taller than `max_height`
 /// (`None` = the best available). Prefers H.264 + AAC, which is cheap to decode,
 /// then any video and audio up to that height, then whatever exists.
+///
+/// H.264 first (fastest to decode), then anything but AV1, which the Android
+/// FFmpeg can't decode (FFmpeg's own AV1 decoder needs hardware support).
+/// AV1 is only taken when a video offers nothing else.
 pub fn format_for(max_height: Option<u32>) -> String {
     match max_height {
-        Some(h) => format!("bv*[height<={h}][vcodec^=avc1]+ba[ext=m4a]/bv*[height<={h}]+ba/b[height<={h}]/wv*+ba/w"),
-        None => "bv*+ba/b".to_string(),
+        Some(h) => format!(
+            "bv*[height<={h}][vcodec^=avc1]+ba[ext=m4a]/bv*[height<={h}][vcodec^=avc1]+ba\
+             /bv*[height<={h}][vcodec!^=av01]+ba/b[height<={h}][vcodec!^=av01]\
+             /wv*[vcodec!^=av01]+ba/w[vcodec!^=av01]/bv*[height<={h}]+ba/b[height<={h}]/wv*+ba/w"
+        ),
+        None => "bv*[vcodec^=avc1]+ba[ext=m4a]/bv*[vcodec!^=av01]+ba/b[vcodec!^=av01]/bv*+ba/b".to_string(),
     }
 }
 
@@ -514,7 +522,11 @@ mod tests {
     fn formats_by_quality() {
         assert!(format_for(Some(360)).contains("height<=360"));
         assert!(format_for(Some(720)).contains("height<=720"));
-        assert_eq!(format_for(None), "bv*+ba/b");
+        assert!(!format_for(None).starts_with("bv*+ba"));
+        for f in [format_for(Some(720)), format_for(None)] {
+            // AV1 only as the last resort.
+            assert!(f.split('/').take(4).all(|alt| !alt.contains("av01") || alt.contains("!^=av01")));
+        }
     }
 
     #[test]
